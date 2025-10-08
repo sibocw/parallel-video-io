@@ -6,12 +6,12 @@ from pathlib import Path
 
 
 def read_frames_from_video(
-    video_path: Path, frame_indices: list[int] | None = None
+    video_path: Path | str, frame_indices: list[int] | None = None
 ) -> tuple[list[np.ndarray], float]:
     """Read specific frames from a video file.
 
     Args:
-        video_path (Path): Path to the video file.
+        video_path (Path | str): Path to the video file.
         frame_indices (list[int] | None): List of frame indices to read.
             If None, read all frames.
 
@@ -46,7 +46,7 @@ _default_ffmpeg_params_for_video_writing = [
 
 
 def write_frames_to_video(
-    video_path: Path,
+    video_path: Path | str,
     frames: list[np.ndarray],
     fps: float,
     codec: str = "libx264",
@@ -57,7 +57,7 @@ def write_frames_to_video(
     """Write a sequence of frames to a video file.
 
     Args:
-        video_path (Path): Path to save the video file.
+        video_path (Path | str): Path to save the video file.
         frames (list[np.ndarray]): List of frames as numpy arrays (in
             [height, width, channels] format).
         fps (float): Frames per second for the output video.
@@ -96,7 +96,7 @@ def write_frames_to_video(
                 logging.log(log_level, f"Written frame {i + 1}/{len(frames)}")
 
 
-def check_num_frames(video_path: Path) -> int:
+def check_num_frames(video_path: Path | str) -> int:
     """Check number of frames in a video file."""
     try:
         with imageio.get_reader(video_path) as reader:
@@ -107,14 +107,14 @@ def check_num_frames(video_path: Path) -> int:
 
 
 def get_video_metadata(
-    sample_video_path: Path,
+    sample_video_path: Path | str,
     cache_metadata: bool = True,
     use_cached_metadata: bool = True,
 ):
     """Get number of frames, frame size, and FPS of a video file.
 
     Args:
-        sample_video_path (Path): Path to the video file.
+        sample_video_path (Path | str): Path to the video file.
         cache_metadata (bool): Whether to cache the metadata to a JSON
             file. Default is True.
         use_cached_metadata (bool): Whether to use cached metadata if
@@ -125,6 +125,7 @@ def get_video_metadata(
     """
     metadata = {}
 
+    sample_video_path = Path(sample_video_path)
     cache_path = sample_video_path.with_suffix(".metadata.json")
     if use_cached_metadata and cache_path.is_file():
         try:

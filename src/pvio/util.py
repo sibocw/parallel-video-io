@@ -1,19 +1,21 @@
 import numpy as np
-from typing import Any
+from typing import Hashable
 
 
-def balance_load_lpt(tasks: dict[Any, int], n_workers: int) -> list[list[Any]]:
+def balance_load_lpt(
+    tasks: dict[Hashable, int], n_workers: int
+) -> list[list[Hashable]]:
     """The Longest Processing Time (LPT) algorithm for load balancing: sort
     tasks by decreasing duration and assigns each task to the worker with
     the currently smallest total assigned load.
 
     Args:
-        tasks (dict[Any, int]): A dict mapping task identifiers (can be
-            any hashable type) to their estimated durations.
+        tasks (dict[Hashable, int]): A dict mapping task identifiers (can
+            be any hashable type) to their estimated durations.
         n_workers (int): Number of workers to distribute tasks across.
 
     Returns:
-        assignments (list[list[Any]]): A list of lists, where
+        assignments (list[list[Hashable]]): A list of lists, where
             assignments[i] contains the IDs of tasks assigned to worker i.
     """
     # Sort tasks by descending duration
