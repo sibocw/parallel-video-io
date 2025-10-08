@@ -63,7 +63,7 @@ print(n_frames)  # this is an integer frame count
 
 # To get more information
 # Note that this function actually caches these information in a JSON file. To control
-# whether you want to save the cache file or disregard exsiting cache files, set the
+# whether you want to save the cache file or disregard existing cache files, set the
 # `cache_metadata` (default True) and `use_cached_metadata` (default True) arguments.
 meta = get_video_metadata("example.mp4")
 print(meta)  # meta is a dictionary containing the keys "n_frames", "frame_size", "fps"
