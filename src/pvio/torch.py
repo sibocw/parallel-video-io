@@ -40,7 +40,7 @@ class VideoCollectionDataset(IterableDataset):
         self.worker_assignments = None
         self.as_image_dirs = as_image_dirs
         self.frame_sorting = frame_sorting
-        self.n_frames_lookup = None  # filled in later
+        self.n_frames_lookup = None  # Populated by assign_workers()
 
         # Check if the paths are all valid
         for p in self.video_paths:
