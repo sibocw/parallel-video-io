@@ -40,33 +40,34 @@ class VideoCollectionDataset(IterableDataset):
         self.worker_assignments = None
         self.as_image_dirs = as_image_dirs
         self.frame_sorting = frame_sorting
+        self.n_frames_lookup = None  # Populated by assign_workers()
 
         # Check if the paths are all valid
-        for p in paths:
+        for p in self.video_paths:
             if self.as_image_dirs:
-                if not Path(p).is_dir():
+                if not p.is_dir():
                     raise ValueError(
                         f"One of the specified paths {p} is not a valid directory. "
                         "Directories containing individual frame images are expected."
                     )
             else:
-                if not Path(p).is_file():
+                if not p.is_file():
                     raise ValueError(
                         f"One of the specified paths {p} is not a valid file. "
                         "Video files are expected."
                     )
 
         # Sort images if we're loading from directories of images
-        self._frame_sortings = {}
+        self.frame_sortings = {}
         regex = re.compile(frame_sorting) if frame_sorting else None
         if as_image_dirs:
-            for path in paths:
+            for path in self.video_paths:
                 all_files = [f for f in path.iterdir() if f.is_file()]
                 if regex is None:
                     sorting_func = lambda f: f.name
                 else:
                     sorting_func = lambda f: self._extract_frame_number(f.name, regex)
-                self._frame_sortings[path] = all_files.sort(key=sorting_func)
+                self.frame_sortings[path] = sorted(all_files, key=sorting_func)
 
     def assign_workers(
         self, n_frame_loading_workers: int, n_metadata_indexing_workers: int = -1
@@ -85,7 +86,7 @@ class VideoCollectionDataset(IterableDataset):
         # the workload more evenly among workers by the number of frames.
         if self.as_image_dirs:
             self.n_frames_lookup = {
-                path: len(frames) for path, frames in self._frame_sortings.items()
+                path: len(frames) for path, frames in self.frame_sortings.items()
             }
         else:
             # Count frames in videos. This requires partially decoding the video files
@@ -121,10 +122,13 @@ class VideoCollectionDataset(IterableDataset):
         for video_path in video_subset:
             if self.as_image_dirs:
                 # Read individual images
-                frame_files = self._frame_sortings[video_path]
+                frame_files = self.frame_sortings[video_path]
                 for frame_idx, frame_file in enumerate(frame_files):
                     frame = imageio.imread(frame_file)
-                    frame = torch.from_numpy(frame).permute(2, 0, 1)  # HWC to CHW
+                    frame = torch.from_numpy(frame)
+                    if frame.ndim == 2:
+                        frame = frame.unsqueeze(-1)  # add channel dim
+                    frame = frame.permute(2, 0, 1)  # HWC to CHW
                     yield {
                         "frame": frame,
                         "video_path": video_path,
@@ -142,6 +146,11 @@ class VideoCollectionDataset(IterableDataset):
                     }
 
     def __len__(self):
+        if self.n_frames_lookup is None:
+            raise ValueError(
+                "VideoCollectionDataset length is unknown until workers are assigned. "
+                "Call `assign_workers()` before using `len()`."
+            )
         return sum(self.n_frames_lookup.values())
 
     @staticmethod
