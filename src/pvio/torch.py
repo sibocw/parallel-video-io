@@ -66,7 +66,7 @@ class VideoCollectionDataset(IterableDataset):
                     sorting_func = lambda f: f.name
                 else:
                     sorting_func = lambda f: self._extract_frame_number(f.name, regex)
-                self._frame_sortings[path] = all_files.sort(key=sorting_func)
+                self._frame_sortings[path] = sorted(all_files, key=sorting_func)
 
     def assign_workers(
         self, n_frame_loading_workers: int, n_metadata_indexing_workers: int = -1
@@ -124,7 +124,10 @@ class VideoCollectionDataset(IterableDataset):
                 frame_files = self._frame_sortings[video_path]
                 for frame_idx, frame_file in enumerate(frame_files):
                     frame = imageio.imread(frame_file)
-                    frame = torch.from_numpy(frame).permute(2, 0, 1)  # HWC to CHW
+                    frame = torch.from_numpy(frame)
+                    if frame.ndim == 2:
+                        frame = frame.unsqueeze(-1)  # add channel dim
+                    frame = frame.permute(2, 0, 1)  # HWC to CHW
                     yield {
                         "frame": frame,
                         "video_path": video_path,
