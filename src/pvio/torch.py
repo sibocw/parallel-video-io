@@ -43,15 +43,15 @@ class VideoCollectionDataset(IterableDataset):
         self.n_frames_lookup = None  # filled in later
 
         # Check if the paths are all valid
-        for p in paths:
+        for p in self.video_paths:
             if self.as_image_dirs:
-                if not Path(p).is_dir():
+                if not p.is_dir():
                     raise ValueError(
                         f"One of the specified paths {p} is not a valid directory. "
                         "Directories containing individual frame images are expected."
                     )
             else:
-                if not Path(p).is_file():
+                if not p.is_file():
                     raise ValueError(
                         f"One of the specified paths {p} is not a valid file. "
                         "Video files are expected."
@@ -61,7 +61,7 @@ class VideoCollectionDataset(IterableDataset):
         self.frame_sortings = {}
         regex = re.compile(frame_sorting) if frame_sorting else None
         if as_image_dirs:
-            for path in paths:
+            for path in self.video_paths:
                 all_files = [f for f in path.iterdir() if f.is_file()]
                 if regex is None:
                     sorting_func = lambda f: f.name
