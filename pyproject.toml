@@ -1,15 +1,15 @@
 [project]
 name = "parallel-video-io"
-version = "0.1.1"
+version = "0.1.2"
 description = "Tools for reading and writing videos, and loading them efficiently with PyTorch."
 authors = [
     {name = "Sibo Wang-Chen", email = "sibo.wang@epfl.ch"}
 ]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.10"
+requires-python = ">=3.10,<=3.13"
 dependencies = [
-    "torch>=2.7,<3",
+    "torch>=2.8,<3",
     "imageio>=2.37.0,<3",
     "imageio-ffmpeg==0.6.0",
     "torchcodec==0.7.0",
