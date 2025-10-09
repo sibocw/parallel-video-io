@@ -72,12 +72,15 @@ class VideoCollectionDataset(IterableDataset):
         self.frame_sortings = {}
         regex = re.compile(frame_sorting) if frame_sorting else None
         if as_image_dirs:
+            # Iterate over the canonical Path objects (self.video_paths) so we
+            # consistently store Path keys and avoid relying on caller types
             for path in self.video_paths:
                 all_files = [f for f in path.iterdir() if f.is_file()]
                 if regex is None:
                     sorting_func = lambda f: f.name
                 else:
                     sorting_func = lambda f: self._extract_frame_number(f.name, regex)
+                # Store a new sorted list (list.sort() returns None)
                 self.frame_sortings[path] = sorted(all_files, key=sorting_func)
 
     def assign_workers(
