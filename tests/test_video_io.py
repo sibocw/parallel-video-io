@@ -1,5 +1,6 @@
 import pytest
 import numpy as np
+import json
 from pathlib import Path
 
 from pvio.video_io import (
@@ -59,7 +60,6 @@ def test_get_video_metadata_uses_cache(tmp_path: Path):
     meta_file = out.with_suffix(".metadata.json")
     # write fake metadata
     fake_meta = {"n_frames": 123, "frame_size": [32, 32], "fps": 12.0}
-    import json
 
     with open(meta_file, "w") as f:
         json.dump(fake_meta, f)
