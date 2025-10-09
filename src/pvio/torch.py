@@ -2,6 +2,7 @@ import torch
 import logging
 import re
 import imageio.v2 as imageio
+from typing import Callable
 from torchcodec.decoders import VideoDecoder
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 from pathlib import Path
@@ -21,6 +22,7 @@ class VideoCollectionDataset(IterableDataset):
         paths: list[Path | str],
         as_image_dirs: bool = False,
         frame_sorting: None | str = None,
+        transform: Callable | None = None,
     ):
         r"""
         Args:
@@ -35,12 +37,21 @@ class VideoCollectionDataset(IterableDataset):
                 string, it is used as a regex pattern to extract frame
                 numbers from filenames (e.g. r"frame\D*(\d+)(?!\d)").
                 When `as_image_dirs` is False, this argument is ignored.
+            transform (Callable | None): A function that is to be applied
+                to each frame after loading. Note that the following
+                operations are already applied to each frame:
+                (i) conversion from numpy array to torch tensor,
+                (ii) conversion from HWC to CHW format, and
+                (iii) conversion from uint8 in [0, 255] to float in [0, 1].
+                The transform function, if provided, is applied after these
+                operations.
         """
         self.video_paths = [Path(p) for p in paths]
         self.worker_assignments = None
         self.as_image_dirs = as_image_dirs
         self.frame_sorting = frame_sorting
         self.n_frames_lookup = None  # Populated by assign_workers()
+        self.transform = transform
 
         # Check if the paths are all valid
         for p in self.video_paths:
@@ -61,12 +72,15 @@ class VideoCollectionDataset(IterableDataset):
         self.frame_sortings = {}
         regex = re.compile(frame_sorting) if frame_sorting else None
         if as_image_dirs:
+            # Iterate over the canonical Path objects (self.video_paths) so we
+            # consistently store Path keys and avoid relying on caller types
             for path in self.video_paths:
                 all_files = [f for f in path.iterdir() if f.is_file()]
                 if regex is None:
                     sorting_func = lambda f: f.name
                 else:
                     sorting_func = lambda f: self._extract_frame_number(f.name, regex)
+                # Store a new sorted list (list.sort() returns None)
                 self.frame_sortings[path] = sorted(all_files, key=sorting_func)
 
     def assign_workers(
@@ -129,6 +143,9 @@ class VideoCollectionDataset(IterableDataset):
                     if frame.ndim == 2:
                         frame = frame.unsqueeze(-1)  # add channel dim
                     frame = frame.permute(2, 0, 1)  # HWC to CHW
+                    frame = frame.float() / 255.0  # to float in [0, 1]
+                    if self.transform:
+                        frame = self.transform(frame)
                     yield {
                         "frame": frame,
                         "video_path": video_path,
@@ -139,6 +156,9 @@ class VideoCollectionDataset(IterableDataset):
                 decoder = VideoDecoder(video_path)
                 for frame_idx in range(len(decoder)):
                     frame = decoder[frame_idx]  # returns tensor in CHW
+                    frame = frame.float() / 255.0  # to float in [0, 1]
+                    if self.transform:
+                        frame = self.transform(frame)
                     yield {
                         "frame": frame,
                         "video_path": video_path,

@@ -1,11 +1,13 @@
 import pytest
 import numpy as np
+import json
 from pathlib import Path
 
 from pvio.video_io import (
     write_frames_to_video,
     read_frames_from_video,
     get_video_metadata,
+    check_num_frames,
 )
 
 
@@ -47,3 +49,49 @@ def test_write_frames_mismatched_sizes_raises(tmp_path: Path):
     out = tmp_path / "bad.mp4"
     with pytest.raises(ValueError):
         write_frames_to_video(out, frames, fps=5.0)
+
+
+def test_get_video_metadata_uses_cache(tmp_path: Path):
+    # prepare dummy video and metadata
+    frames = _make_dummy_frames(n=2, h=32, w=32, channels=3)
+    out = tmp_path / "cache.mp4"
+    write_frames_to_video(out, frames, fps=5.0)
+
+    meta_file = out.with_suffix(".metadata.json")
+    # write fake metadata
+    fake_meta = {"n_frames": 123, "frame_size": [32, 32], "fps": 12.0}
+
+    with open(meta_file, "w") as f:
+        json.dump(fake_meta, f)
+
+    meta = get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+    assert meta["n_frames"] == 123
+    assert meta["frame_size"] == (32, 32)
+    assert meta["fps"] == 12.0
+
+
+def test_get_video_metadata_corrupted_cache_raises(tmp_path: Path):
+    frames = _make_dummy_frames(n=1, h=32, w=32, channels=3)
+    out = tmp_path / "corrupt.mp4"
+    write_frames_to_video(out, frames, fps=5.0)
+
+    meta_file = out.with_suffix(".metadata.json")
+    with open(meta_file, "w") as f:
+        f.write("not a json")
+
+    with pytest.raises(Exception):
+        # implementation currently prints and re-raises
+        get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+
+
+def test_check_num_frames_on_invalid_file_raises(tmp_path: Path):
+    bad = tmp_path / "not_a_video.txt"
+    bad.write_text("hello")
+    with pytest.raises(RuntimeError):
+        check_num_frames(bad)
+
+
+def test_write_frames_to_video_empty_raises(tmp_path: Path):
+    out = tmp_path / "empty.mp4"
+    with pytest.raises(ValueError):
+        write_frames_to_video(out, [], fps=10.0)

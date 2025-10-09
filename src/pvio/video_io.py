@@ -110,6 +110,7 @@ def get_video_metadata(
     sample_video_path: Path | str,
     cache_metadata: bool = True,
     use_cached_metadata: bool = True,
+    metadata_suffix: str = ".metadata.json",
 ):
     """Get number of frames, frame size, and FPS of a video file.
 
@@ -119,6 +120,8 @@ def get_video_metadata(
             file. Default is True.
         use_cached_metadata (bool): Whether to use cached metadata if
             available. Default is True.
+        metadata_suffix (str): Suffix to use for the metadata cache file.
+            Default is ".metadata.json".
 
     Returns:
         dict: A dictionary containing the video metadata.
@@ -126,7 +129,7 @@ def get_video_metadata(
     metadata = {}
 
     sample_video_path = Path(sample_video_path)
-    cache_path = sample_video_path.with_suffix(".metadata.json")
+    cache_path = sample_video_path.with_suffix(metadata_suffix)
     if use_cached_metadata and cache_path.is_file():
         try:
             with open(cache_path, "r") as f:
