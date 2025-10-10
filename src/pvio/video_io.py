@@ -107,7 +107,7 @@ def check_num_frames(video_path: Path | str) -> int:
 
 
 def get_video_metadata(
-    sample_video_path: Path | str,
+    video_path: Path | str,
     cache_metadata: bool = True,
     use_cached_metadata: bool = True,
     metadata_suffix: str = ".metadata.json",
@@ -115,7 +115,7 @@ def get_video_metadata(
     """Get number of frames, frame size, and FPS of a video file.
 
     Args:
-        sample_video_path (Path | str): Path to the video file.
+        video_path (Path | str): Path to the video file.
         cache_metadata (bool): Whether to cache the metadata to a JSON
             file. Default is True.
         use_cached_metadata (bool): Whether to use cached metadata if
@@ -128,8 +128,8 @@ def get_video_metadata(
     """
     metadata = {}
 
-    sample_video_path = Path(sample_video_path)
-    cache_path = sample_video_path.with_suffix(metadata_suffix)
+    video_path = Path(video_path)
+    cache_path = video_path.with_suffix(metadata_suffix)
     if use_cached_metadata and cache_path.is_file():
         try:
             with open(cache_path, "r") as f:
@@ -141,9 +141,9 @@ def get_video_metadata(
             print(f"Corrupted metadata cache file {cache_path}")
             raise e
     else:
-        n_frames = check_num_frames(sample_video_path)
+        n_frames = check_num_frames(video_path)
         sample_frames, fps = read_frames_from_video(
-            sample_video_path, frame_indices=[0]
+            video_path, frame_indices=[0]
         )
         frame_size = sample_frames[0].shape[:2]
 
