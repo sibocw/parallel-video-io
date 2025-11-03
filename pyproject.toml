@@ -12,6 +12,7 @@ dependencies = [
     "torch>=2.8,<3",
     "imageio>=2.37.0,<3",
     "imageio-ffmpeg==0.6.0",
+    "av>=16.0.0",
     "torchcodec==0.7.0",
     "joblib>=1.5.1,<2",
     "tqdm>=4.67,<5",
