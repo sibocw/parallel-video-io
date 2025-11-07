@@ -153,7 +153,6 @@ The tests are organized into:
 
 There are a few tests that write small MP4 files using imageio/ffmpeg; ensure `ffmpeg` is available in the environment where tests run.
 
-Note that these tests are written by Claude.
 
 ## Notes & troubleshooting
 
