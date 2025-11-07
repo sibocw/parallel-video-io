@@ -24,6 +24,7 @@ class VideoCollectionDataset(IterableDataset):
         as_image_dirs: bool = False,
         frame_sorting: None | str = None,
         transform: Callable | None = None,
+        buffer_size: int = 32,
     ):
         r"""
         Args:
@@ -46,6 +47,9 @@ class VideoCollectionDataset(IterableDataset):
                 (iii) conversion from uint8 in [0, 255] to float in [0, 1].
                 The transform function, if provided, is applied after these
                 operations.
+            buffer_size (int): Number of frames to buffer when reading
+                from image directories. Larger buffer sizes may improve
+                performance at the cost of higher memory usage.
         """
         self.video_paths = [Path(p) for p in paths]
         self.worker_assignments = None
@@ -53,6 +57,8 @@ class VideoCollectionDataset(IterableDataset):
         self.frame_sorting = frame_sorting
         self.n_frames_lookup = None  # Populated by assign_workers()
         self.transform = transform
+        self.buffer_size = buffer_size
+        self._frames_buffer: dict[tuple[str, int], torch.Tensor] = {}
 
         # Check if the paths are all valid
         for p in self.video_paths:
@@ -70,7 +76,7 @@ class VideoCollectionDataset(IterableDataset):
                     )
 
         # Sort images if we're loading from directories of images
-        self.frame_sortings = {}
+        self.frame_sortings: dict[str, list[Path]] = {}
         regex = re.compile(frame_sorting) if frame_sorting else None
         if as_image_dirs:
             # Iterate over the canonical Path objects (self.video_paths) so we
@@ -82,7 +88,8 @@ class VideoCollectionDataset(IterableDataset):
                 else:
                     sorting_func = lambda f: self._extract_frame_number(f.name, regex)
                 # Store a new sorted list (list.sort() returns None)
-                self.frame_sortings[path] = sorted(all_files, key=sorting_func)
+                path_posix = path.absolute().as_posix()
+                self.frame_sortings[path_posix] = sorted(all_files, key=sorting_func)
 
     def assign_workers(
         self,
@@ -100,11 +107,11 @@ class VideoCollectionDataset(IterableDataset):
             f"This is effectively {n_frame_loading_workers_effective} workers."
         )
 
-        # Figure out how many frames there are in each video. This allows us to split
-        # the workload more evenly among workers by the number of frames.
+        # Figure out how many frames there are in each video
         if self.as_image_dirs:
-            self.n_frames_lookup = {
-                path: len(frames) for path, frames in self.frame_sortings.items()
+            self.n_frames_lookup: dict[str, int] = {
+                path: len(frames)  # key already in absolute POSIX format
+                for path, frames in self.frame_sortings.items()
             }
         else:
             # Count frames in videos. This requires partially decoding the video files
@@ -117,35 +124,46 @@ class VideoCollectionDataset(IterableDataset):
                 delayed(get_video_metadata)(path)
                 for path in tqdm(self.video_paths, desc="Indexing videos", disable=None)
             )
-            self.n_frames_lookup = {
-                path: meta["n_frames"] for path, meta in zip(self.video_paths, metas)
+            self.n_frames_lookup: dict[str, int] = {
+                path.absolute().as_posix(): meta["n_frames"]
+                for path, meta in zip(self.video_paths, metas)
             }
-        all_chunks: list[tuple[Path, int, int]] = []
+        all_chunks: list[tuple[str, int, int]] = []
         for path, n_frames in self.n_frames_lookup.items():
             n_chunks = int(np.ceil(n_frames / chunk_size))
             for chunk_idx in range(n_chunks):
                 start_frame_idx = chunk_idx * chunk_size
                 end_frame_idx = min(start_frame_idx + chunk_size, n_frames)
+                # path is an absolute POSIX string
                 all_chunks.append((path, start_frame_idx, end_frame_idx))
         self.worker_assignments = defaultdict(list)
-        for chunk_idx, chunk in enumerate(all_chunks):
-            worker_id = chunk_idx % n_frame_loading_workers_effective
-            self.worker_assignments[worker_id].append(chunk[0])
+        n_chunks_per_worker = int(
+            np.ceil(len(all_chunks) / n_frame_loading_workers_effective)
+        )
+        # Don't do `worker_id = chunk_id // n_workers` - for performance reasons, we
+        # want each worker to get a contiguous set of chunks as much as possible to
+        # minimize seeking
+        for worker_id in range(n_frame_loading_workers_effective):
+            start_idx = worker_id * n_chunks_per_worker
+            end_idx = start_idx + n_chunks_per_worker
+            self.worker_assignments[worker_id] = all_chunks[start_idx:end_idx]
 
     def __iter__(self):
         # Get worker info for distributed loading
         worker_info = get_worker_info()
         if worker_info is None:
             # Single process
-            chunks_subset = []
-            for path in self.video_paths:
-                chunks_subset.append((path, 0, self.n_frames_lookup[path]))
+            assert (
+                len(self.worker_assignments) == 1
+            ), "Using a single worker but worker assignments indicate multiple workers."
+            my_chunks = list(self.worker_assignments.values())[0]
         else:
             # Split videos among workers
-            video_subset = self.worker_assignments[worker_info.id]
+            my_chunks = self.worker_assignments[worker_info.id]
 
         # Each worker sequentially decodes its assigned videos
-        for video_path, start_frame_idx, end_frame_idx in video_subset:
+        for video_path, start_frame_idx, end_frame_idx in my_chunks:
+            # video_path is an absolute POSIX string
             if self.as_image_dirs:
                 # Read individual images
                 frame_files = self.frame_sortings[video_path]
@@ -167,10 +185,12 @@ class VideoCollectionDataset(IterableDataset):
                     }
             else:
                 # Use torchcodec to decode videos
-                decoder = VideoDecoder(video_path)
-                for frame_idx in range(len(decoder)):
-                    frame = decoder[frame_idx]  # returns tensor in CHW
-                    frame = frame.float() / 255.0  # to float in [0, 1]
+                decoder = VideoDecoder(
+                    video_path, seek_mode="exact", dimension_order="NCHW"
+                )
+                for frame_idx in range(start_frame_idx, end_frame_idx):
+                    frame = self._get_frame(decoder, frame_idx, video_path)
+                    frame = frame.float() / 255.0
                     if self.transform:
                         frame = self.transform(frame)
                     yield {
@@ -178,6 +198,29 @@ class VideoCollectionDataset(IterableDataset):
                         "video_path": video_path,
                         "frame_idx": frame_idx,
                     }
+
+    def _get_frame(self, decoder: VideoDecoder, frame_idx: int, video_path_posix: str):
+        """Get a frame at the specified index, using buffering to reduce
+        the number of decoding calls. If the frame is not in the buffer,
+        a new batch of frames is decoded and stored in the buffer.
+
+        Note that this purges the previous buffer and assumes that the next
+        frames will be requested soon. Therefore, this buffering strategy
+        only makes sense for sequential access patterns (which is the case
+        using our payload assignment strategy)."""
+        key = (video_path_posix, frame_idx)
+        if key in self._frames_buffer:
+            return self._frames_buffer[key]
+
+        n_frames_in_video = self.n_frames_lookup[video_path_posix]
+        max_frame_idx_to_buffer = min(frame_idx + self.buffer_size, n_frames_in_video)
+        frame_indices_to_buffer = list(range(frame_idx, max_frame_idx_to_buffer))
+        frames = decoder.get_frames_at(frame_indices_to_buffer)  # returns a NCHW tensor
+        self._frames_buffer = {
+            (video_path_posix, idx): frames.data[i, ...]
+            for i, idx in enumerate(frame_indices_to_buffer)
+        }
+        return self._frames_buffer[key]
 
     def __len__(self):
         if self.n_frames_lookup is None:
@@ -224,8 +267,11 @@ class VideoCollectionDataLoader(DataLoader):
         kwargs["collate_fn"] = self._collate
         super().__init__(dataset, **kwargs)
 
+        num_workers = self.num_workers
+        if num_workers == 0:
+            num_workers = 1
         self.dataset.assign_workers(
-            n_frame_loading_workers=self.num_workers, chunk_size=chunk_size
+            n_frame_loading_workers=num_workers, chunk_size=chunk_size
         )
 
     @staticmethod

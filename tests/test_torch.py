@@ -26,7 +26,10 @@ class DummyDataset(VideoCollectionDataset):
         self.video_paths = []
 
     def assign_workers(
-        self, n_frame_loading_workers: int, n_metadata_indexing_workers: int = -1
+        self,
+        n_frame_loading_workers: int,
+        n_metadata_indexing_workers: int = -1,
+        chunk_size: int = 1000,
     ):
         # no-op for tests to avoid expensive metadata indexing
         return
@@ -78,8 +81,9 @@ def test_vcd_as_image_dirs_sorting_and_regex(tmp_path: Path):
     (d / "c.png").write_bytes(b"x")
 
     ds = VideoCollectionDataset([d], as_image_dirs=True)
-    # inspect internal sorting
-    files = ds.frame_sortings[d]
+    # inspect internal sorting - now uses absolute POSIX strings as keys
+    path_key = d.absolute().as_posix()
+    files = ds.frame_sortings[path_key]
     assert [f.name for f in files] == ["a.png", "b.png", "c.png"]
 
     # regex sorting
@@ -90,11 +94,13 @@ def test_vcd_as_image_dirs_sorting_and_regex(tmp_path: Path):
     (d2 / "frame_1.png").write_bytes(b"x")
 
     ds2 = VideoCollectionDataset([d2], as_image_dirs=True, frame_sorting=r"(\d+)")
-    files2 = ds2.frame_sortings[d2]
+    path_key2 = d2.absolute().as_posix()
+    files2 = ds2.frame_sortings[path_key2]
     assert [f.name for f in files2] == ["frame_1.png", "frame_2.png", "frame_10.png"]
 
 
-def test_assign_workers_splits_by_frame_count(tmp_path: Path):
+def test_assign_workers_creates_chunks(tmp_path: Path):
+    """Test that videos are split into chunks correctly"""
     # create two small videos with different frame counts
     v1 = tmp_path / "v1.mp4"
     v2 = tmp_path / "v2.mp4"
@@ -102,14 +108,195 @@ def test_assign_workers_splits_by_frame_count(tmp_path: Path):
     def make_frames(n):
         return [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(n)]
 
-    write_frames_to_video(v1, make_frames(2), fps=5.0)
-    write_frames_to_video(v2, make_frames(6), fps=5.0)
+    write_frames_to_video(v1, make_frames(25), fps=5.0)  # 25 frames
+    write_frames_to_video(v2, make_frames(15), fps=5.0)  # 15 frames
 
     ds = VideoCollectionDataset([v1, v2], as_image_dirs=False)
-    ds.assign_workers(n_frame_loading_workers=2, n_metadata_indexing_workers=1)
+    ds.assign_workers(
+        n_frame_loading_workers=2, n_metadata_indexing_workers=1, chunk_size=10
+    )
 
-    # both videos should be present in n_frames_lookup
-    assert v1 in ds.n_frames_lookup and v2 in ds.n_frames_lookup
-    # assignments should include all videos once
-    flattened = [p for worker in ds.worker_assignments for p in worker]
-    assert set(flattened) == set(ds.video_paths)
+    # Check n_frames_lookup uses absolute POSIX strings
+    v1_key = v1.absolute().as_posix()
+    v2_key = v2.absolute().as_posix()
+    assert v1_key in ds.n_frames_lookup
+    assert v2_key in ds.n_frames_lookup
+    assert ds.n_frames_lookup[v1_key] == 25
+    assert ds.n_frames_lookup[v2_key] == 15
+
+    # Collect all chunks across workers
+    all_chunks = []
+    for worker_id in ds.worker_assignments:
+        all_chunks.extend(ds.worker_assignments[worker_id])
+
+    # Should have 3 chunks for v1 (0-10, 10-20, 20-25) and 2 for v2 (0-10, 10-15)
+    assert len(all_chunks) == 5
+
+    # Verify chunk structure
+    v1_chunks = [c for c in all_chunks if c[0] == v1_key]
+    v2_chunks = [c for c in all_chunks if c[0] == v2_key]
+
+    assert len(v1_chunks) == 3
+    assert len(v2_chunks) == 2
+
+    # Check v1 chunks cover all frames
+    v1_chunks_sorted = sorted(v1_chunks, key=lambda x: x[1])
+    assert v1_chunks_sorted[0] == (v1_key, 0, 10)
+    assert v1_chunks_sorted[1] == (v1_key, 10, 20)
+    assert v1_chunks_sorted[2] == (v1_key, 20, 25)
+
+    # Check v2 chunks
+    v2_chunks_sorted = sorted(v2_chunks, key=lambda x: x[1])
+    assert v2_chunks_sorted[0] == (v2_key, 0, 10)
+    assert v2_chunks_sorted[1] == (v2_key, 10, 15)
+
+
+def test_assign_workers_contiguous_chunks_per_worker(tmp_path: Path):
+    """Test that workers get contiguous chunks to minimize seeking"""
+    v1 = tmp_path / "v1.mp4"
+
+    def make_frames(n):
+        return [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(n)]
+
+    write_frames_to_video(v1, make_frames(40), fps=5.0)
+
+    ds = VideoCollectionDataset([v1], as_image_dirs=False)
+    ds.assign_workers(
+        n_frame_loading_workers=2, n_metadata_indexing_workers=1, chunk_size=10
+    )
+
+    # With 40 frames and chunk_size=10, we get 4 chunks
+    # With 2 workers, each should get 2 contiguous chunks
+    assert len(ds.worker_assignments) == 2
+    worker_0_chunks = ds.worker_assignments[0]
+    worker_1_chunks = ds.worker_assignments[1]
+
+    assert len(worker_0_chunks) == 2
+    assert len(worker_1_chunks) == 2
+
+    # Verify contiguity - worker 0 should get first 2 chunks
+    assert worker_0_chunks[0][1] < worker_0_chunks[1][1]  # start indices increasing
+    assert worker_0_chunks[0][2] == worker_0_chunks[1][1]  # end of chunk 0 = start of chunk 1
+
+
+def test_chunks_handle_videos_shorter_than_chunk_size(tmp_path: Path):
+    """Test that videos shorter than chunk_size still work correctly"""
+    v1 = tmp_path / "short.mp4"
+
+    def make_frames(n):
+        return [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(n)]
+
+    write_frames_to_video(v1, make_frames(5), fps=5.0)
+
+    ds = VideoCollectionDataset([v1], as_image_dirs=False)
+    ds.assign_workers(
+        n_frame_loading_workers=2, n_metadata_indexing_workers=1, chunk_size=100
+    )
+
+    # Should create exactly 1 chunk covering all frames
+    all_chunks = []
+    for worker_chunks in ds.worker_assignments.values():
+        all_chunks.extend(worker_chunks)
+
+    assert len(all_chunks) == 1
+    v1_key = v1.absolute().as_posix()
+    assert all_chunks[0] == (v1_key, 0, 5)
+
+
+def test_buffer_size_parameter():
+    """Test that buffer_size parameter is accepted and stored"""
+    ds = VideoCollectionDataset([], as_image_dirs=False, buffer_size=64)
+    assert ds.buffer_size == 64
+
+    # Default value
+    ds2 = VideoCollectionDataset([], as_image_dirs=False)
+    assert ds2.buffer_size == 32
+
+
+def test_chunk_size_parameter_in_dataloader(tmp_path: Path):
+    """Test that chunk_size is passed correctly to assign_workers"""
+    v1 = tmp_path / "v1.mp4"
+
+    def make_frames(n):
+        return [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(n)]
+
+    write_frames_to_video(v1, make_frames(30), fps=5.0)
+
+    ds = VideoCollectionDataset([v1], as_image_dirs=False)
+    
+    # Create dataloader with custom chunk_size
+    loader = VideoCollectionDataLoader(
+        ds, batch_size=5, num_workers=0, chunk_size=10
+    )
+
+    # Should have 3 chunks (0-10, 10-20, 20-30)
+    all_chunks = []
+    for worker_chunks in ds.worker_assignments.values():
+        all_chunks.extend(worker_chunks)
+    
+    assert len(all_chunks) == 3
+
+
+def test_image_dirs_with_chunks(tmp_path: Path):
+    """Test that image directories work correctly with chunking"""
+    d = tmp_path / "frames"
+    d.mkdir()
+    
+    # Create 15 dummy image files
+    for i in range(15):
+        (d / f"frame_{i:03d}.png").write_bytes(b"x")
+    
+    ds = VideoCollectionDataset([d], as_image_dirs=True, frame_sorting=r"(\d+)")
+    ds.assign_workers(n_frame_loading_workers=2, chunk_size=5)
+    
+    # Should create 3 chunks (0-5, 5-10, 10-15)
+    all_chunks = []
+    for worker_chunks in ds.worker_assignments.values():
+        all_chunks.extend(worker_chunks)
+    
+    assert len(all_chunks) == 3
+    
+    # Verify chunks cover correct frame ranges
+    d_key = d.absolute().as_posix()
+    chunks_for_dir = [c for c in all_chunks if c[0] == d_key]
+    chunks_sorted = sorted(chunks_for_dir, key=lambda x: x[1])
+    
+    assert chunks_sorted[0] == (d_key, 0, 5)
+    assert chunks_sorted[1] == (d_key, 5, 10)
+    assert chunks_sorted[2] == (d_key, 10, 15)
+
+
+def test_multiple_videos_chunk_distribution(tmp_path: Path):
+    """Test that chunks from multiple videos are distributed across workers"""
+    v1 = tmp_path / "v1.mp4"
+    v2 = tmp_path / "v2.mp4"
+    v3 = tmp_path / "v3.mp4"
+
+    def make_frames(n):
+        return [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(n)]
+
+    write_frames_to_video(v1, make_frames(12), fps=5.0)
+    write_frames_to_video(v2, make_frames(12), fps=5.0)
+    write_frames_to_video(v3, make_frames(12), fps=5.0)
+
+    ds = VideoCollectionDataset([v1, v2, v3], as_image_dirs=False)
+    ds.assign_workers(
+        n_frame_loading_workers=3, n_metadata_indexing_workers=1, chunk_size=10
+    )
+
+    # 3 videos * ~2 chunks each = ~6 chunks total
+    # With 3 workers, each should get ~2 chunks
+    all_chunks = []
+    for worker_chunks in ds.worker_assignments.values():
+        all_chunks.extend(worker_chunks)
+
+    # 12 frames / 10 chunk_size = 2 chunks per video (0-10, 10-12)
+    assert len(all_chunks) == 6
+
+    # Verify all videos are represented
+    v1_key = v1.absolute().as_posix()
+    v2_key = v2.absolute().as_posix()
+    v3_key = v3.absolute().as_posix()
+    
+    video_paths_in_chunks = {c[0] for c in all_chunks}
+    assert video_paths_in_chunks == {v1_key, v2_key, v3_key}
