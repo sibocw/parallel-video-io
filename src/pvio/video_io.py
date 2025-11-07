@@ -142,9 +142,7 @@ def get_video_metadata(
             raise e
     else:
         n_frames = check_num_frames(video_path)
-        sample_frames, fps = read_frames_from_video(
-            video_path, frame_indices=[0]
-        )
+        sample_frames, fps = read_frames_from_video(video_path, frame_indices=[0])
         frame_size = sample_frames[0].shape[:2]
 
         if cache_metadata:

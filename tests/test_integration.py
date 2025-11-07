@@ -1,4 +1,5 @@
-import pytest
+"""Integration tests for VideoCollectionDataset with parallel loading."""
+
 import torch
 import numpy as np
 from pathlib import Path
@@ -6,20 +7,19 @@ from pathlib import Path
 from pvio.torch import VideoCollectionDataLoader, VideoCollectionDataset
 from pvio.video_io import write_frames_to_video
 
+from .test_utils import make_frames_with_stride
+
 
 def test_load_single_video_with_workers(tmp_path: Path):
-    """Integration test: Load video with multiple workers"""
+    """Integration test: Load video with multiple workers."""
     v1 = tmp_path / "video.mp4"
 
-    # Create a video where each frame has a unique value
-    n_frames = 50
-    frames = [
-        np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(n_frames)
-    ]
+    n_frames = 25
+    frames = make_frames_with_stride(n_frames, stride=10)
     write_frames_to_video(v1, frames, fps=10.0)
 
     ds = VideoCollectionDataset([v1], as_image_dirs=False)
-    loader = VideoCollectionDataLoader(ds, batch_size=10, num_workers=2, chunk_size=20)
+    loader = VideoCollectionDataLoader(ds, batch_size=10, num_workers=2, chunk_size=10)
 
     # Collect all frames
     all_frames = []
@@ -34,31 +34,36 @@ def test_load_single_video_with_workers(tmp_path: Path):
     assert len(all_indices) == n_frames
     assert set(all_indices) == set(range(n_frames))
 
-    # Verify frame values are correct (each frame should have unique value)
+    # Verify frame values are approximately correct (allowing for compression)
     for i in range(n_frames):
-        # Find the frame with index i
         idx_in_list = all_indices.index(i)
         frame = all_frames[idx_in_list]
-        expected_value = i / 255.0  # Normalized
-        assert torch.allclose(frame, torch.full_like(frame, expected_value), atol=1e-5)
+        expected_value = ((i * 10) % 256) / 255.0
+
+        # Use higher tolerance for lossy compression
+        mean_value = frame.mean().item()
+        assert (
+            abs(mean_value - expected_value) < 0.05
+        ), f"Frame {i}: expected {expected_value:.3f}, got {mean_value:.3f}"
 
 
 def test_load_multiple_videos_with_workers(tmp_path: Path):
-    """Integration test: Load multiple videos with workers"""
+    """Integration test: Load multiple videos with workers."""
     videos = []
-    expected_frame_counts = [15, 25, 10]
+    expected_frame_counts = [15, 20, 10]
 
     for i, n_frames in enumerate(expected_frame_counts):
         video_path = tmp_path / f"video_{i}.mp4"
-        # Each video has frames with values based on video index and frame index
-        # Video 0: frames 0, 1, 2, ...
-        # Video 1: frames 100, 101, 102, ...
-        # Video 2: frames 200, 201, 202, ...
+        # Each video starts at a different base value to distinguish them
+        # Video 0: 0, 10, 20, ...
+        # Video 1: 100, 110, 120, ...
+        # Video 2: 200, 210, 220, ...
+        frames = []
         base_value = i * 100
-        frames = [
-            np.full((32, 32, 3), fill_value=(base_value + j) % 256, dtype=np.uint8)
-            for j in range(n_frames)
-        ]
+        for j in range(n_frames):
+            value = (base_value + j * 10) % 256
+            frame = np.full((32, 32, 3), fill_value=value, dtype=np.uint8)
+            frames.append(frame)
         write_frames_to_video(video_path, frames, fps=10.0)
         videos.append(video_path)
 
@@ -86,21 +91,22 @@ def test_load_multiple_videos_with_workers(tmp_path: Path):
         expected_count = expected_frame_counts[video_idx]
         assert len(frame_dict) == expected_count
 
-        # Verify frame values
+        # Verify frame values (approximately due to compression)
         base_value = video_idx * 100
         for frame_idx, frame in frame_dict.items():
-            expected_value = ((base_value + frame_idx) % 256) / 255.0
-            assert torch.allclose(
-                frame, torch.full_like(frame, expected_value), atol=1e-5
-            ), f"Video {video_idx}, frame {frame_idx} has wrong value"
+            expected_value = ((base_value + frame_idx * 10) % 256) / 255.0
+            mean_value = frame.mean().item()
+            assert (
+                abs(mean_value - expected_value) < 0.05
+            ), f"Video {video_idx}, frame {frame_idx}: expected {expected_value:.3f}, got {mean_value:.3f}"
 
 
 def test_transform_applied_correctly_with_workers(tmp_path: Path):
-    """Integration test: Verify transform is applied correctly"""
+    """Integration test: Verify transform is applied correctly per-frame."""
     v1 = tmp_path / "video.mp4"
 
-    # Create video with known values
-    frames = [np.full((32, 32, 3), fill_value=128, dtype=np.uint8) for _ in range(20)]
+    # Create video with uniform value 120
+    frames = [np.full((32, 32, 3), fill_value=120, dtype=np.uint8) for _ in range(20)]
     write_frames_to_video(v1, frames, fps=10.0)
 
     # Transform that doubles values
@@ -116,61 +122,72 @@ def test_transform_applied_correctly_with_workers(tmp_path: Path):
     loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=2, chunk_size=10)
 
     for batch in loader:
-        # Original value is 128/255 ≈ 0.502
-        # After transform: 0.502 * 2 ≈ 1.004
-        expected_value = (128 / 255.0) * 2.0
+        # Original value is ~120/255 ≈ 0.471
+        # After transform: 0.471 * 2 ≈ 0.941
+        expected_value = (120 / 255.0) * 2.0
         for frame in batch["frames"]:
-            assert torch.allclose(
-                frame, torch.full_like(frame, expected_value), atol=1e-3
-            )
+            mean_value = frame.mean().item()
+            assert abs(mean_value - expected_value) < 0.1
 
 
 def test_chunking_with_buffer_across_videos(tmp_path: Path):
-    """Test that buffer is properly managed when processing chunks from different videos"""
+    """Test that buffer is properly managed when processing chunks from different videos."""
     v1 = tmp_path / "v1.mp4"
     v2 = tmp_path / "v2.mp4"
 
-    # Create two videos with distinct values
-    # Video 1: all frames have value 50
-    # Video 2: all frames have value 150
-    frames_v1 = [np.full((32, 32, 3), fill_value=50, dtype=np.uint8) for _ in range(30)]
-    frames_v2 = [
-        np.full((32, 32, 3), fill_value=150, dtype=np.uint8) for _ in range(30)
-    ]
+    # Create two videos with distinct stride patterns
+    # Video 1: 0, 10, 20, ...
+    # Video 2: 100, 110, 120, ...
+    frames_v1 = make_frames_with_stride(30, stride=10)
+    frames_v2 = []
+    for i in range(30):
+        value = (100 + i * 10) % 256
+        frame = np.full((32, 32, 3), fill_value=value, dtype=np.uint8)
+        frames_v2.append(frame)
 
     write_frames_to_video(v1, frames_v1, fps=10.0)
     write_frames_to_video(v2, frames_v2, fps=10.0)
 
     ds = VideoCollectionDataset([v1, v2], as_image_dirs=False, buffer_size=10)
-    # Use chunk_size that will create multiple chunks per video
-    # 30 frames / 15 chunk_size = 2 chunks per video
+    # chunk_size=15 creates 2 chunks per video
     loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=1, chunk_size=15)
 
     frames_by_video = {}
     for batch in loader:
         for i in range(len(batch["frame_indices"])):
             video_path = batch["video_paths"][i]
+            frame_idx = batch["frame_indices"][i]
             frame = batch["frames"][i]
 
             if video_path not in frames_by_video:
-                frames_by_video[video_path] = []
-            frames_by_video[video_path].append(frame)
+                frames_by_video[video_path] = {}
+            frames_by_video[video_path][frame_idx] = frame
 
     # Verify frames from each video have correct values
     v1_key = v1.absolute().as_posix()
     v2_key = v2.absolute().as_posix()
 
-    for frame in frames_by_video[v1_key]:
-        expected = 50 / 255.0
-        assert torch.allclose(frame, torch.full_like(frame, expected), atol=1e-5)
+    # Check v1 frames
+    for frame_idx, frame in frames_by_video[v1_key].items():
+        expected = ((frame_idx * 10) % 256) / 255.0
+        mean_value = frame.mean().item()
+        assert (
+            abs(mean_value - expected) < 0.05
+        ), f"v1 frame {frame_idx}: expected {expected:.3f}, got {mean_value:.3f}"
 
-    for frame in frames_by_video[v2_key]:
-        expected = 150 / 255.0
-        assert torch.allclose(frame, torch.full_like(frame, expected), atol=1e-5)
+    # Check v2 frames
+    for frame_idx, frame in frames_by_video[v2_key].items():
+        expected = ((100 + frame_idx * 10) % 256) / 255.0
+        mean_value = frame.mean().item()
+        assert (
+            abs(mean_value - expected) < 0.05
+        ), f"v2 frame {frame_idx}: expected {expected:.3f}, got {mean_value:.3f}"
 
 
 def test_image_dirs_with_workers(tmp_path: Path):
-    """Integration test: Load from image directories with workers"""
+    """Integration test: Load from image directories with workers."""
+    import imageio.v2 as imageio
+
     d1 = tmp_path / "dir1"
     d2 = tmp_path / "dir2"
     d1.mkdir()
@@ -179,15 +196,11 @@ def test_image_dirs_with_workers(tmp_path: Path):
     # Create images in directory 1 (value 30)
     for i in range(20):
         img = np.full((32, 32, 3), fill_value=30, dtype=np.uint8)
-        import imageio.v2 as imageio
-
         imageio.imwrite(d1 / f"frame_{i:03d}.png", img)
 
-    # Create images in directory 2 (value 60)
+    # Create images in directory 2 (value 80)
     for i in range(15):
-        img = np.full((32, 32, 3), fill_value=60, dtype=np.uint8)
-        import imageio.v2 as imageio
-
+        img = np.full((32, 32, 3), fill_value=80, dtype=np.uint8)
         imageio.imwrite(d2 / f"frame_{i:03d}.png", img)
 
     ds = VideoCollectionDataset([d1, d2], as_image_dirs=True, frame_sorting=r"(\d+)")
@@ -210,25 +223,24 @@ def test_image_dirs_with_workers(tmp_path: Path):
     assert len(frames_by_dir[d1_key]) == 20
     assert len(frames_by_dir[d2_key]) == 15
 
-    # Verify values
+    # Verify values (PNGs are lossless, so exact match expected)
     for frame in frames_by_dir[d1_key]:
         expected = 30 / 255.0
         assert torch.allclose(frame, torch.full_like(frame, expected), atol=1e-5)
 
     for frame in frames_by_dir[d2_key]:
-        expected = 60 / 255.0
+        expected = 80 / 255.0
         assert torch.allclose(frame, torch.full_like(frame, expected), atol=1e-5)
 
 
 def test_zero_workers_still_works(tmp_path: Path):
-    """Test that num_workers=0 works correctly"""
+    """Test that num_workers=0 works correctly."""
     v1 = tmp_path / "video.mp4"
 
-    frames = [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(25)]
+    frames = make_frames_with_stride(25, stride=10)
     write_frames_to_video(v1, frames, fps=10.0)
 
     ds = VideoCollectionDataset([v1], as_image_dirs=False)
-    # num_workers=0 means single-process loading
     loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=0, chunk_size=10)
 
     all_indices = []

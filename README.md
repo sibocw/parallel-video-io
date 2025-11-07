@@ -7,7 +7,7 @@ This repository provides small, focused utilities around video I/O and a PyTorch
 ## Key features
 - Read frames from videos (random access or sequential) using imageio/ffmpeg.
 - Write sequences of numpy frames to H.264 MP4 files with sane defaults.
-- PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that provide a simple iterator that uses multiple processes to load data from different videos under the hood. This is especially handy for running trained deep learning models on many videos in production.
+- PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that provide a simple iterator that uses multiple processes to load data from different videos under the hood. Videos are split into temporal chunks and distributed across workers for efficient parallel loading. This is especially handy for running trained deep learning models on many videos in production.
 
 ## Table of contents
 - [Installation](#installation)
@@ -35,17 +35,6 @@ Or with Poetry:
 poetry install
 ```
 
-You can include this package as a dependency for your project by including the following in your `pyproject.toml`:
-
-```toml
-[project]
-# ... other stuff
-dependencies = [
-    # ...
-    "parallel-video-io @ git+https://github.com/sibocw/parallel-video-io.git",
-]
-```
-
 Make sure `ffmpeg` is available on your `$PATH` (required by imageio-ffmpeg).
 
 ## Quick examples
@@ -59,14 +48,13 @@ from pvio.video_io import get_video_metadata, check_num_frames
 
 # To get the number of frames in a video
 n_frames = check_num_frames("example.mp4")
-print(n_frames)  # this is an integer frame count
+print(n_frames)  # integer
 
 # To get more information
-# Note that this function actually caches these information in a JSON file. To control
-# whether you want to save the cache file or disregard existing cache files, set the
-# `cache_metadata` (default True) and `use_cached_metadata` (default True) arguments.
+# This function actually caches these information in a JSON file. To control whether you
+# want to use caching, modify the `cache_metadata` and `use_cached_metadata` arguments.
 meta = get_video_metadata("example.mp4")
-print(meta)  # meta is a dictionary containing the keys "n_frames", "frame_size", "fps"
+print(meta)  # dict containing the keys "n_frames", "frame_size", and "fps"
 ```
 
 ### Reading video frames
@@ -91,8 +79,7 @@ from pvio.video_io import write_frames_to_video
 frames = [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(10)]
 
 # Save them to file
-# There are more complex video writing parameters that can be tuned - see the docstring
-# for details.
+# More complex video writing parameters are available - see the docstring for details
 write_frames_to_video("example.mp4", frames, fps=25.0)
 ```
 
@@ -102,7 +89,7 @@ results, use dimensions divisible by 16.
 
 ### Using the PyTorch dataset and dataloader
 
-The `VideoCollectionDataset` iterates frames either from video files or from directories containing individual image frames.
+The `VideoCollectionDataset` iterates frames either from video files or from directories containing individual image frames. Then, you can use `VideoCollectionDataLoader` to load frames in parallel. This can be very handy for inference pipelines of neural networks that independently process all frames in a video. [TorchCodec](https://meta-pytorch.org/torchcodec) is used under the hood.
 
 ```python
 from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
@@ -110,21 +97,42 @@ from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
 # Initialize Dataset from video files
 paths = ["/path/to/video1.mp4", "/path/to/video2.mp4"]
 ds = VideoCollectionDataset(paths)
+
 # ... or from directories containing individual frames as images
 paths = ["/path/to/frames_dir1", "/path/to/frames_dir2"]
 # To control sorting of frame files within each dir, use the `frame_sorting` argument
 # (see docstring for details)
 ds = VideoCollectionDataset(paths, as_image_dirs=True)
 
+# You can optionally provide a transform function that will be applied to each frame
+# after loading (applied to CHW float tensors in [0, 1])
+def my_transform(frame):
+    return frame * 2.0  # example: double pixel values
+ds = VideoCollectionDataset(paths, transform=my_transform)
+
+# You can also set a buffer_size parameter. This is the number of frames to decode at
+# once when reading videos (default 32). Larger buffer size = faster loading at the cost
+# of memory usage.
+ds = VideoCollectionDataset(paths, buffer_size=64)
+
 # Wrap in the special DataLoader
-# (you can add other DataLoader keyword arguments if you wish)
+# (you can add other torch.utils.data.DataLoader keyword arguments if you wish)
 loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=4)
 
+# You can control the temporal chunking behavior with chunk_size, i.e. number of frames
+# that a decoder instance will work on in each parallelized job (default 1000).
+# Smaller chunks = more fine-grained parallelization but more overhead.
+loader = VideoCollectionDataLoader(
+    ds, batch_size=8, num_workers=4, chunk_size=500
+)
+
 # Now you can iterate over all frames from all videos in a single iterator. Behind the
-# scenes, these frames are fetched in parallel (each worker handles one video at a time)
+# scenes, videos are split into temporal chunks and these chunks are distributed across
+# workers for efficient parallel loading (each worker processes contiguous chunks to
+# minimize seeking)
 for batch in loader:
 	frames = batch["frames"]  # torch.Tensor: B x C x H x W
-	video_paths = batch["video_paths"]  # list of Path or str, depending on input
+	video_paths = batch["video_paths"]  # list of str (absolute POSIX paths)
 	frame_indices = batch["frame_indices"]  # list of int
 ```
 
@@ -138,10 +146,17 @@ The test suite uses pytest. Run it from the repository root:
 pytest tests
 ```
 
+The tests are organized into:
+- `test_video_io.py` - Tests for video I/O functions
+- `test_torch.py` - Unit tests for VideoCollectionDataset
+- `test_integration.py` - Integration tests with parallel loading
+
 There are a few tests that write small MP4 files using imageio/ffmpeg; ensure `ffmpeg` is available in the environment where tests run.
+
+Note that these tests are written by Claude.
 
 ## Notes & troubleshooting
 
 - FFmpeg macroblock constraints: some ffmpeg builds require frame dimensions to be divisible by 16. If you see a warning about `macro_block_size=16` and unexpected resizing, choose frame sizes divisible by 16 in production pipelines.
-- If you plan to decode many large videos, enabling metadata caching (the package writes a `.metadata.json` next to each video when `get_video_metadata` is called) will speed up repeated indexing.
+- If you plan to decode many large videos, enabling metadata caching will speed up repeated indexing (the package writes a `.metadata.json` for each video under the same directory when `get_video_metadata` is called).
 - The PyTorch loader expects the dataset passed to `VideoCollectionDataLoader` to be an instance of `VideoCollectionDataset` and enforces the built-in collate function.
