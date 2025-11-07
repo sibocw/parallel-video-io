@@ -48,8 +48,9 @@ class VideoCollectionDataset(IterableDataset):
                 The transform function, if provided, is applied after these
                 operations.
             buffer_size (int): Number of frames to buffer when reading
-                from image directories. Larger buffer sizes may improve
-                performance at the cost of higher memory usage.
+                from video files. Buffering is not used when reading from
+                image directories. Larger buffer sizes may improve performance
+                at the cost of higher memory usage.
         """
         self.video_paths = [Path(p) for p in paths]
         self.worker_assignments = None
