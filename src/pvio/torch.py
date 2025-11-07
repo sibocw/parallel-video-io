@@ -2,6 +2,8 @@ import torch
 import logging
 import re
 import imageio.v2 as imageio
+import numpy as np
+from collections import defaultdict
 from typing import Callable
 from torchcodec.decoders import VideoDecoder
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
@@ -10,7 +12,6 @@ from tqdm import tqdm
 from joblib import Parallel, delayed
 
 from .video_io import get_video_metadata
-from .util import balance_load_lpt
 
 
 class VideoCollectionDataset(IterableDataset):
@@ -84,7 +85,10 @@ class VideoCollectionDataset(IterableDataset):
                 self.frame_sortings[path] = sorted(all_files, key=sorting_func)
 
     def assign_workers(
-        self, n_frame_loading_workers: int, n_metadata_indexing_workers: int = -1
+        self,
+        n_frame_loading_workers: int,
+        n_metadata_indexing_workers: int = -1,
+        chunk_size: int = 1000,
     ):
         # Check how many frame loading workers we're actually using (e.g. -1 actually
         # means all available cores, so we need to figure out how many that is)
@@ -116,28 +120,38 @@ class VideoCollectionDataset(IterableDataset):
             self.n_frames_lookup = {
                 path: meta["n_frames"] for path, meta in zip(self.video_paths, metas)
             }
-
-        # Split videos evenly among the available workers
-        self.worker_assignments = balance_load_lpt(
-            self.n_frames_lookup, max(1, n_frame_loading_workers_effective)
-        )
+        all_chunks: list[tuple[Path, int, int]] = []
+        for path, n_frames in self.n_frames_lookup.items():
+            n_chunks = int(np.ceil(n_frames / chunk_size))
+            for chunk_idx in range(n_chunks):
+                start_frame_idx = chunk_idx * chunk_size
+                end_frame_idx = min(start_frame_idx + chunk_size, n_frames)
+                all_chunks.append((path, start_frame_idx, end_frame_idx))
+        self.worker_assignments = defaultdict(list)
+        for chunk_idx, chunk in enumerate(all_chunks):
+            worker_id = chunk_idx % n_frame_loading_workers_effective
+            self.worker_assignments[worker_id].append(chunk[0])
 
     def __iter__(self):
         # Get worker info for distributed loading
         worker_info = get_worker_info()
         if worker_info is None:
             # Single process
-            video_subset = self.video_paths
+            chunks_subset = []
+            for path in self.video_paths:
+                chunks_subset.append((path, 0, self.n_frames_lookup[path]))
         else:
             # Split videos among workers
             video_subset = self.worker_assignments[worker_info.id]
 
         # Each worker sequentially decodes its assigned videos
-        for video_path in video_subset:
+        for video_path, start_frame_idx, end_frame_idx in video_subset:
             if self.as_image_dirs:
                 # Read individual images
                 frame_files = self.frame_sortings[video_path]
                 for frame_idx, frame_file in enumerate(frame_files):
+                    if frame_idx < start_frame_idx or frame_idx >= end_frame_idx:
+                        continue
                     frame = imageio.imread(frame_file)
                     frame = torch.from_numpy(frame)
                     if frame.ndim == 2:
@@ -191,7 +205,9 @@ class VideoCollectionDataset(IterableDataset):
 
 
 class VideoCollectionDataLoader(DataLoader):
-    def __init__(self, dataset: VideoCollectionDataset, **kwargs):
+    def __init__(
+        self, dataset: VideoCollectionDataset, chunk_size: int = 1000, **kwargs
+    ):
         if not isinstance(dataset, VideoCollectionDataset):
             raise ValueError(
                 "VideoCollectionDataLoader only works with VideoCollectionDataset."
@@ -208,7 +224,9 @@ class VideoCollectionDataLoader(DataLoader):
         kwargs["collate_fn"] = self._collate
         super().__init__(dataset, **kwargs)
 
-        self.dataset.assign_workers(n_frame_loading_workers=self.num_workers)
+        self.dataset.assign_workers(
+            n_frame_loading_workers=self.num_workers, chunk_size=chunk_size
+        )
 
     @staticmethod
     def _collate(batch):
