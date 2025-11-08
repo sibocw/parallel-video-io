@@ -7,7 +7,8 @@ This repository provides small, focused utilities around video I/O and a PyTorch
 ## Key features
 - Read frames from videos (random access or sequential) using imageio/ffmpeg.
 - Write sequences of numpy frames to H.264 MP4 files with sane defaults.
-- PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that provide a simple iterator that uses multiple processes to load data from different videos under the hood. Videos are split into temporal chunks and distributed across workers for efficient parallel loading. This is especially handy for running trained deep learning models on many videos in production.
+- PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that provide a simple iterator that uses multiple processes to load data from different videos under the hood. Videos are distributed across workers for efficient parallel loading.
+- `SimpleVideoCollectionLoader`: an even easier API that combines dataset and dataloader creation in one step.
 
 ## Table of contents
 - [Installation](#installation)
@@ -16,22 +17,27 @@ This repository provides small, focused utilities around video I/O and a PyTorch
 	- [Reading video frames](#reading-video-frames)
 	- [Writing a video](#writing-a-video)
 	- [Using the PyTorch dataset and dataloader](#using-the-pytorch-dataset-and-dataloader)
+	- [Using the simplified dataloader](#using-the-simplevideocollectionloader)
 - [Testing](#testing)
 - [Notes & troubleshooting](#notes--troubleshooting)
 
 ## Installation
 
-This project targets Python >= 3.10. The library's runtime dependencies are listed in `pyproject.toml` (torch, imageio, imageio-ffmpeg, torchcodec, joblib, tqdm, numpy, pytest).
-
-If you're using pip in a development environment, install editable with:
-
+Install from PyPI:
 ```bash
-pip install -e .
+pip install parallel-video-io
 ```
 
-Or with Poetry:
+To clone a copy and install in editable mode:
 
 ```bash
+git clone git@github.com:sibocw/parallel-video-io.git
+cd parallel-video-io
+
+# with pip
+pip install -e . --config-settings editable_mode=compat
+
+# ... or with Poetry
 poetry install
 ```
 
@@ -119,21 +125,34 @@ ds = VideoCollectionDataset(paths, buffer_size=64)
 # (you can add other torch.utils.data.DataLoader keyword arguments if you wish)
 loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=4)
 
-# You can control the temporal chunking behavior with chunk_size, i.e. number of frames
-# that a decoder instance will work on in each parallelized job (default 1000).
-# Smaller chunks = more fine-grained parallelization but more overhead.
-loader = VideoCollectionDataLoader(
-    ds, batch_size=8, num_workers=4, chunk_size=500
+# Now you can iterate over all frames from all videos in a single iterator. Behind the
+# scenes, frames are distributed across workers for efficient parallel loading
+for batch in loader:
+    frames = batch["frames"]  # torch.Tensor: B x C x H x W
+    video_indices = batch["video_indices"]  # list of int (video indices)
+    frame_indices = batch["frame_indices"]  # list of int
+```
+
+### Using the SimpleVideoCollectionLoader
+
+If you don't mind breaking the standard `Dataset` + `DataLoader` pattern with `torch.utils.data`, you can use `SimpleVideoCollectionLoader` which combines dataset and dataloader creation:
+
+```python
+from pvio.torch import SimpleVideoCollectionLoader
+
+# All VideoCollectionDataset parameters, plus DataLoader parameters in one step
+loader = SimpleVideoCollectionLoader(
+    ["/path/to/video1.mp4", "/path/to/video2.mp4"],
+    batch_size=8,
+    num_workers=4,
+    transform=my_transform,  # optional
+    buffer_size=64,  # optional
 )
 
-# Now you can iterate over all frames from all videos in a single iterator. Behind the
-# scenes, videos are split into temporal chunks and these chunks are distributed across
-# workers for efficient parallel loading (each worker processes contiguous chunks to
-# minimize seeking)
 for batch in loader:
-	frames = batch["frames"]  # torch.Tensor: B x C x H x W
-	video_paths = batch["video_paths"]  # list of str (absolute POSIX paths)
-	frame_indices = batch["frame_indices"]  # list of int
+    frames = batch["frames"]  # torch.Tensor: B x C x H x W  
+    video_indices = batch["video_indices"]  # list of int (video indices)
+    frame_indices = batch["frame_indices"]  # list of int
 ```
 
 When loading from video files (as_image_dirs=False), the dataset uses `torchcodec`'s `VideoDecoder` to decode frames and `get_video_metadata` to build per-video frame counts; you may want to enable caching if you index many large files.
