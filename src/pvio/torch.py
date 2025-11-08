@@ -25,7 +25,7 @@ class VideoCollectionDataset(IterableDataset):
         as_image_dirs: bool = False,
         frame_sorting: None | str = None,
         transform: Callable | None = None,
-        buffer_size: int = 32,
+        buffer_size: int = 64,
         cache_video_metadata: bool = True,
         use_cached_video_metadata: bool = True,
         n_frame_counting_workers: int = -1,
