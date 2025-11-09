@@ -17,7 +17,7 @@ This repository provides small, focused utilities around video I/O and a PyTorch
 	- [Reading video frames](#reading-video-frames)
 	- [Writing a video](#writing-a-video)
 	- [Using the PyTorch dataset and dataloader](#using-the-pytorch-dataset-and-dataloader)
-	- [Using the simplified dataloader](#using-the-simplevideocollectionloader)
+	- [Using simplified dataloader](#using-simplevideocollectionloader)
 - [Testing](#testing)
 - [Notes & troubleshooting](#notes--troubleshooting)
 
@@ -98,8 +98,8 @@ results, use dimensions divisible by 16.
 The `VideoCollectionDataset` iterates frames either from video files or from directories containing individual image frames. Then, you can use `VideoCollectionDataLoader` to load frames in parallel. This can be very handy for inference pipelines of neural networks that independently process all frames in a video. [TorchCodec](https://meta-pytorch.org/torchcodec) is used under the hood.
 
 ```python
-from pvio.torch import EncodedVideo  # "real" videos (e.g. .mp4 files)
-from pvio.torch import ImageDirVideo  # directories containing individual images
+from pvio.torch import EncodedVideo  # for "real" videos (e.g. MP4 files)
+from pvio.torch import ImageDirVideo  # for directories containing individual images
 from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
 
 # Create Video objects for video files
@@ -108,13 +108,13 @@ video2 = EncodedVideo("path/to/video2.mp4")
 ds = VideoCollectionDataset([video1, video2])
 
 # ... or from directories containing individual frames as images
-# (hint: you can use a custom regular expression to control how frame IDs are parsed)
 video3 = ImageDirVideo("path/to/frames_dir1")
+# (hint: you can use a custom regular expression to control how frame IDs are parsed)
 video4 = ImageDirVideo("path/to/frames_dir2", frameid_regex=r"frame\D*(\d+)(?!\d)")
 ds = VideoCollectionDataset([video3, video4])
 
 # You can optionally provide a transform function that will be applied to each frame
-# after loading (applied to CHW float tensors in [0, 1])
+# after loading (frames already in float tensor format, ranged [0, 1], in CHW format)
 # (hint: these can also be from torchvision.transforms)
 def my_transform(frame):
     return frame * 2.0  # example: double pixel values
@@ -127,29 +127,30 @@ video_with_buffer = EncodedVideo("path/to/video.mp4", buffer_size=128)
 ds = VideoCollectionDataset([video_with_buffer])
 
 # Wrap dataset in a DataLoader
-# (you can add other torch.utils.data.DataLoader keyword arguments if you wish)
+# (you can supply other torch.utils.data.DataLoader keyword arguments if you wish)
 loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=4)
 
-# Now you can iterate over all frames from all videos in a single iterator. Behind the
-# scenes, frames are distributed across workers for efficient parallel loading
+# Now you can iterate over the entire dataset in batches through a single interator
+# Behind the scenes, frames are distributed across workers for efficient loading
 for batch in loader:
     frames = batch["frames"]  # torch.Tensor: B x C x H x W
     video_indices = batch["video_indices"]  # list of int (video indices)
     frame_indices = batch["frame_indices"]  # list of int
 ```
 
-### Using the SimpleVideoCollectionLoader
+### Using SimpleVideoCollectionLoader
 
 If you don't mind breaking the standard `Dataset` + `DataLoader` pattern with `torch.utils.data`, you can use `SimpleVideoCollectionLoader`, which combines dataset and dataloader creation. This dataloader can also automatically create the appropriate Video objects from paths:
 
 ```python
 from pvio.torch import SimpleVideoCollectionLoader
 
-# Supply all Video backend parameters, VideoCollectionDataset parameters, and DataLoader
-# parameters in one call.
 # Video specification can be mixed: path to real videos, path to directories of images,
 # and pre-created Video objects are all allowed.
 videos = ["path/to/video1.mp4", "path/to/dir1/", EncodedVideo("path/to/video2.mp4")]
+
+# Supply all Video backend parameters, VideoCollectionDataset parameters, and DataLoader
+# parameters in one call.
 loader = SimpleVideoCollectionLoader(
     videos,
     batch_size=8,
@@ -159,6 +160,7 @@ loader = SimpleVideoCollectionLoader(
     frameid_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
 )
 
+# Iterate over the entire dataset in batches through a single interator
 for batch in loader:
     frames = batch["frames"]  # torch.Tensor: B x C x H x W
     video_indices = batch["video_indices"]  # list of int (video indices)

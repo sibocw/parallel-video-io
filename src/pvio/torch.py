@@ -235,7 +235,7 @@ class EncodedVideo(Video):
             )
 
         # If requested frame is already in buffer, return it directly
-        # NOTE: the buffer always uses **virtual** frameids!
+        # NOTE: the buffer always uses **virtual** frame IDs!
         if index in self._buffer:
             return self._buffer[index]
 
@@ -433,7 +433,7 @@ class VideoCollectionDataset(IterableDataset):
         # the caches that we've just generated
         for video in self.videos:
             if isinstance(video, EncodedVideo) and not video.use_cached_metadata:
-                logger.info(
+                logger.warning(
                     "For efficiency, `use_cached_metadata` must be set to True for "
                     "all EncodedVideo objects when they are managed by "
                     "VideoCollectionDataset. Overriding to True."
@@ -510,7 +510,7 @@ class VideoCollectionDataset(IterableDataset):
             end_idx = min(start_idx + n_frames_per_worker, self.n_frames_total)
             frame_specs = frame_specs_all[start_idx:end_idx, :]
             # Convert to list of (video_idx, start_frameid, end_frameid)
-            # {start,end}_frameid are counted from 0 and relative to frame_range[0]
+            # start/end frame IDs are **virtual** indices relative to frame_range[0]
             if frame_specs.shape[0] == 0:
                 continue
             unique_video_idxs = np.unique(frame_specs[:, 0])
