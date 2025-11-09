@@ -255,6 +255,11 @@ class EncodedVideo(Video):
 
         return self._buffer[index]
 
+    def close(self):
+        # VideoDecoder from torchcodec doesn't have a "close" method - just let Python
+        # garbage collection handle it
+        self._decoder = None
+
 
 class ImageDirVideo(Video):
     def __init__(
