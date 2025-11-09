@@ -2,6 +2,7 @@
 
 import numpy as np
 import torch
+import imageio.v2 as imageio
 from pathlib import Path
 
 from pvio.video_io import (
@@ -95,7 +96,6 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
 
     frames_dir1.mkdir()
     frames_dir2.mkdir()
-    import imageio.v2 as imageio
 
     for i in range(8):
         img = np.full((32, 32, 3), fill_value=i * 10, dtype=np.uint8)
@@ -121,9 +121,10 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
     # (hint: these can also be from torchvision.transforms)
     def my_transform(frame):
         return frame * 2.0  # example: double pixel values
+
     ds = VideoCollectionDataset([video1, video2], transform=my_transform)
 
-    # You can set a buffer_size parameter when creating EncodedVideo objects. 
+    # You can set a buffer_size parameter when creating EncodedVideo objects.
     # This is the number of frames to decode at once (default 64).
     # Larger buffer size = faster loading at the cost of memory usage.
     video_with_buffer = EncodedVideo(video1_path, buffer_size=128)
@@ -131,7 +132,9 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
 
     # Wrap dataset in a DataLoader
     # (you can add other torch.utils.data.DataLoader keyword arguments if you wish)
-    loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=0)  # Use 0 workers for testing
+    loader = VideoCollectionDataLoader(
+        ds, batch_size=8, num_workers=0
+    )  # Use 0 workers for testing
 
     # Now you can iterate over all frames from all videos in a single iterator. Behind the
     # scenes, frames are distributed across workers for efficient parallel loading
@@ -154,12 +157,11 @@ def test_readme_example_simple_video_collection_loader(tmp_path: Path):
     video1_path = tmp_path / "video1.mp4"
     video2_path = tmp_path / "video2.mp4"
     dir1_path = tmp_path / "dir1"
-    
+
     write_frames_to_video(video1_path, make_frames_with_stride(20, stride=10), fps=10.0)
     write_frames_to_video(video2_path, make_frames_with_stride(15, stride=10), fps=10.0)
-    
+
     dir1_path.mkdir()
-    import imageio.v2 as imageio
     for i in range(8):
         img = np.full((32, 32, 3), fill_value=i * 10, dtype=np.uint8)
         imageio.imwrite(dir1_path / f"frame_{i:03d}.png", img)
