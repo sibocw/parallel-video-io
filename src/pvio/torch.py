@@ -71,13 +71,13 @@ class Video(ABC):
                 )
             return (start, end)
         else:
-            logger.info(
+            logger.debug(
                 "No frame_range specified. Using the full range of the source video."
             )
             return (0, n_frames_source_video)
 
     def setup(self, *args, **kwargs) -> None:
-        """This method is to be called after `__init__`, It first validates arguments
+        """This method is to be called after `__init__`. It first validates arguments
         given to `__init__`, loads metadata, and then calls the backend subclass's
         `._post_setup()` method with arguments passed to this method."""
         if self.__setup_done:
@@ -242,8 +242,8 @@ class EncodedVideo(Video):
         # Otherwise, expunge & refill buffer
         # (load many frames at once to reduce decoding overhead)
         self._buffer.clear()
-        buffer_until = min(index + self.buffer_size, self.frame_range_effective[1])
-        buffer_virtual_frameids = np.arange(index, buffer_until)
+        idx_to_buffer_until = min(index + self.buffer_size, self.n_frames_in_range)
+        buffer_virtual_frameids = np.arange(index, idx_to_buffer_until)
         buffer_real_frameids = buffer_virtual_frameids + self.frame_range_effective[0]
         batch_frames = self._decoder.get_frames_at(buffer_real_frameids).data  # NCHW
         batch_frames = batch_frames.float() / 255.0  # normalize to [0, 1]
@@ -356,8 +356,9 @@ class ImageDirVideo(Video):
         return n_frames_total, frame_size, fps
 
     def _read_frame(self, index: int, transform: Callable | None) -> torch.Tensor:
-        assert index in self.frameid_to_path, f"Frame index {index} not found"
-        frame_path = self.frameid_to_path[index]
+        physical_index = index + self.frame_range_effective[0]
+        assert physical_index in self.frameid_to_path, f"Frame index {index} not found"
+        frame_path = self.frameid_to_path[physical_index]
         frame = imageio.imread(frame_path)
         frame = torch.from_numpy(frame)
         if frame.ndim == 2:
@@ -494,7 +495,7 @@ class VideoCollectionDataset(IterableDataset):
             n_frames_per_worker = min_frames_per_worker
             n_loading_workers = int(np.ceil(self.n_frames_total / n_frames_per_worker))
             logger.info(
-                f"`n_frames_per_worker` is less than `self.min_frames_per_worker` "
+                f"`n_frames_per_worker` is less than `min_frames_per_worker` "
                 f"({min_frames_per_worker}). This will result in many workers working "
                 f"on not so much data, leading to high overhead. "
                 f"Increasing `n_frames_per_worker` to {n_frames_per_worker} and "
@@ -579,7 +580,7 @@ class VideoCollectionDataLoader(DataLoader):
                 process. If the calculated frames per worker is below this threshold,
                 the number of workers is reduced to meet this minimum. This helps avoid
                 excessive overhead from too many workers on small datasets.
-            other keyword arguments are passed to the base DataLoader.
+            **kwargs: Additional keyword arguments passed to the base DataLoader.
         """
         if not isinstance(dataset, VideoCollectionDataset):
             raise ValueError(
