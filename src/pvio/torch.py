@@ -16,8 +16,6 @@ from .video_io import get_video_metadata
 
 
 class VideoCollectionDataset(IterableDataset):
-    """"""
-
     def __init__(
         self,
         paths: list[Path | str],
@@ -32,12 +30,12 @@ class VideoCollectionDataset(IterableDataset):
         min_frames_per_worker: int = 300,
         logger: logging.Logger | None = None,
     ):
-        """Yields individual frames from several videos. Each "video" can be either a
+        r"""Yields individual frames from several videos. Each "video" can be either a
         video file or a directory containing individual frames as images.
 
         Args:
             paths (list[Path | str]): List of video paths, or directories containing
-            frames as individual images.
+                frames as individual images.
             as_image_dirs (bool): If True, treat each path as a directory containing
                 individual frames. Otherwise, treat it as a video file.
             frame_sorting (str | None): When `as_image_dirs` is True, this argument
@@ -153,7 +151,7 @@ class VideoCollectionDataset(IterableDataset):
                 delayed(get_video_metadata)(
                     path, self.cache_video_metadata, self.use_cached_video_metadata
                 )
-                for path in tqdm(self.video_paths, desc="Load metadata", disable=None)
+                for path in self.video_paths
             )
             walltime = time() - start_time
             self._logger.info(

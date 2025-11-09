@@ -112,12 +112,13 @@ ds = VideoCollectionDataset(paths, as_image_dirs=True)
 
 # You can optionally provide a transform function that will be applied to each frame
 # after loading (applied to CHW float tensors in [0, 1])
+paths = ["/path/to/video1.mp4", "/path/to/video2.mp4"]
 def my_transform(frame):
     return frame * 2.0  # example: double pixel values
 ds = VideoCollectionDataset(paths, transform=my_transform)
 
 # You can also set a buffer_size parameter. This is the number of frames to decode at
-# once when reading videos (default 32). Larger buffer size = faster loading at the cost
+# once when reading videos (default 64). Larger buffer size = faster loading at the cost
 # of memory usage.
 ds = VideoCollectionDataset(paths, buffer_size=64)
 
@@ -150,7 +151,7 @@ loader = SimpleVideoCollectionLoader(
 )
 
 for batch in loader:
-    frames = batch["frames"]  # torch.Tensor: B x C x H x W  
+    frames = batch["frames"]  # torch.Tensor: B x C x H x W
     video_indices = batch["video_indices"]  # list of int (video indices)
     frame_indices = batch["frame_indices"]  # list of int
 ```

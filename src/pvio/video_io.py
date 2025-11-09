@@ -68,7 +68,7 @@ def write_frames_to_video(
         log_interval (int | None): If set, log progress every `log_interval` frames
             using the specified logger.
         logger (logging.Logger | None): Logger to use for progress logging. If None, use
-            the logger from `__main__`.
+            the logger from `__name__`.
     """
     if logger is None:
         logger = logging.getLogger(__name__)
@@ -128,15 +128,17 @@ def get_video_metadata(
         metadata_suffix (str): Suffix to use for the metadata cache file. Default is
             ".metadata.json".
         logger (logging.Logger | None): Logger to use for logging. If None, use the
-            logger from `__main__`.
+            logger from `__name__`.
 
     Returns:
         dict: A dictionary containing the video metadata.
     """
-    metadata = {}
+    if logger is None:
+        logger = logging.getLogger(__name__)
 
     video_path = Path(video_path)
     cache_path = video_path.with_suffix(metadata_suffix)
+    metadata = {}
     if use_cached_metadata and cache_path.is_file():
         try:
             with open(cache_path, "r") as f:

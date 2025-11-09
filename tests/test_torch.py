@@ -205,12 +205,12 @@ def test_min_frames_per_worker_parameter():
 
 def test_buffer_size_parameter():
     """Test that buffer_size parameter is accepted and stored."""
-    ds = VideoCollectionDataset([], as_image_dirs=False, buffer_size=64)
-    assert ds.buffer_size == 64
+    ds = VideoCollectionDataset([], as_image_dirs=False, buffer_size=128)
+    assert ds.buffer_size == 128
 
     # Default value
     ds2 = VideoCollectionDataset([], as_image_dirs=False)
-    assert ds2.buffer_size == 32
+    assert ds2.buffer_size == 64
 
 
 def test_dataloader_worker_assignment(tmp_path: Path):
