@@ -5,6 +5,9 @@ import imageio.v2 as imageio
 from pathlib import Path
 
 
+logger = logging.getLogger(__name__)
+
+
 def read_frames_from_video(
     video_path: Path | str, frame_indices: list[int] | None = None
 ) -> tuple[list[np.ndarray], float]:
@@ -52,8 +55,7 @@ def write_frames_to_video(
     codec: str = "libx264",
     ffmpeg_params: list[str] = _default_ffmpeg_params_for_video_writing,
     log_interval: int | None = None,
-    logger: logging.Logger | None = None,
-):
+) -> None:
     """Write a sequence of frames to a video file.
 
     Args:
@@ -65,14 +67,9 @@ def write_frames_to_video(
         ffmpeg_params (list[str]): Additional ffmpeg parameters. Default is a set of
             parameters for high-quality H.264 encoding (see
             _default_ffmpeg_params_for_video_writing).
-        log_interval (int | None): If set, log progress every `log_interval` frames
-            using the specified logger.
-        logger (logging.Logger | None): Logger to use for progress logging. If None, use
-            the logger from `__name__`.
+        log_interval (int | None): If set, log progress every `log_interval` frames at
+            INFO level.
     """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-
     # Check frame size consistency
     if len(frames) == 0:
         raise ValueError("No frames provided to write_frames_to_video")
@@ -115,7 +112,6 @@ def get_video_metadata(
     cache_metadata: bool = True,
     use_cached_metadata: bool = True,
     metadata_suffix: str = ".metadata.json",
-    logger: logging.Logger | None = None,
 ):
     """Get number of frames, frame size, and FPS of a video file.
 
@@ -127,15 +123,10 @@ def get_video_metadata(
             is True.
         metadata_suffix (str): Suffix to use for the metadata cache file. Default is
             ".metadata.json".
-        logger (logging.Logger | None): Logger to use for logging. If None, use the
-            logger from `__name__`.
 
     Returns:
         dict: A dictionary containing the video metadata.
     """
-    if logger is None:
-        logger = logging.getLogger(__name__)
-
     video_path = Path(video_path)
     cache_path = video_path.with_suffix(metadata_suffix)
     metadata = {}

@@ -7,7 +7,7 @@ This repository provides small, focused utilities around video I/O and a PyTorch
 ## Key features
 - Read frames from videos (random access or sequential) using imageio/ffmpeg.
 - Write sequences of numpy frames to H.264 MP4 files with sane defaults.
-- PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that provide a simple iterator that uses multiple processes to load data from different videos under the hood. Videos are distributed across workers for efficient parallel loading.
+- PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that provide a simple iterator that uses multiple processes to load data from different videos under the hood. Videos and frames are distributed across workers for efficient parallel loading.
 - `SimpleVideoCollectionLoader`: an even easier API that combines dataset and dataloader creation in one step.
 
 ## Table of contents

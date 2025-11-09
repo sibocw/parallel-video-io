@@ -9,10 +9,12 @@ from typing import Callable
 from torchcodec.decoders import VideoDecoder
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 from pathlib import Path
-from tqdm import tqdm
 from joblib import Parallel, delayed
 
 from .video_io import get_video_metadata
+
+
+logger = logging.getLogger(__name__)
 
 
 class VideoCollectionDataset(IterableDataset):
@@ -28,7 +30,6 @@ class VideoCollectionDataset(IterableDataset):
         use_cached_video_metadata: bool = True,
         n_frame_counting_workers: int = -1,
         min_frames_per_worker: int = 300,
-        logger: logging.Logger | None = None,
     ):
         r"""Yields individual frames from several videos. Each "video" can be either a
         video file or a directory containing individual frames as images.
@@ -64,11 +65,7 @@ class VideoCollectionDataset(IterableDataset):
                 process. If the calculated frames per worker is below this threshold,
                 the number of workers is reduced to meet this minimum. This helps avoid
                 excessive overhead from too many workers on small datasets.
-            logger (logging.Logger | None): Logger to use for logging. If None, takes
-                from `__name__`.
         """
-        self._logger = logger if logger is not None else logging.getLogger(__name__)
-
         self.video_paths = [Path(p) for p in paths]
         self.as_image_dirs = as_image_dirs
         self.frame_sorting = frame_sorting
@@ -79,7 +76,7 @@ class VideoCollectionDataset(IterableDataset):
         self.min_frames_per_worker = min_frames_per_worker
 
         # Check if the paths are all valid
-        self._logger.info("Checking if provided video paths are valid")
+        logger.info("Checking if provided video paths are valid")
         for p in self.video_paths:
             if self.as_image_dirs:
                 if not p.is_dir():
@@ -97,7 +94,7 @@ class VideoCollectionDataset(IterableDataset):
         # Sort images if we're loading from directories of images
         self.sorted_frame_paths: list[list[Path]] = []
         if as_image_dirs:
-            self._logger.info(
+            logger.info(
                 "Video paths are actually directories containing individual frames. "
                 "Sorting frames for each directory."
             )
@@ -128,20 +125,20 @@ class VideoCollectionDataset(IterableDataset):
     def _count_n_frames_by_video(self, n_frame_counting_workers: int) -> list[int]:
         """Figure out how many frames there are in each video"""
         if self.as_image_dirs:
-            self._logger.info("Counting number of frames in each directory of frames.")
+            logger.info("Counting number of frames in each directory of frames.")
             n_frames_by_video = [
                 len(frame_paths) for frame_paths in self.sorted_frame_paths
             ]
         else:
             # Count frames in videos. This requires partially decoding the video files
             # and it can be quite slow, so we do it in parallel and use caches.
-            self._logger.info(
+            logger.info(
                 "Counting number of frames in each video. This may take a while if no "
                 "cached metadata is available."
             )
             pool = Parallel(n_jobs=n_frame_counting_workers)
             n_videos = len(self.video_paths)
-            self._logger.info(
+            logger.info(
                 f"Loading metadata from {n_videos} videos using "
                 f"n_frame_counting_workers={n_frame_counting_workers} workers "
                 f"(effectively {pool._effective_n_jobs()})."
@@ -154,7 +151,7 @@ class VideoCollectionDataset(IterableDataset):
                 for path in self.video_paths
             )
             walltime = time() - start_time
-            self._logger.info(
+            logger.info(
                 f"Loaded metadata for {n_videos} videos in {walltime:.2f} seconds."
             )
             n_frames_by_video = [meta["n_frames"] for meta in metas]
@@ -188,14 +185,14 @@ class VideoCollectionDataset(IterableDataset):
 
         # Dynamically balance load among workers
         n_frames_per_worker = int(np.ceil(self.n_frames_total / n_loading_workers))
-        self._logger.info(
+        logger.info(
             f"Assigning {self.n_frames_total} total frames from "
             f"{len(self.video_paths)} videos to {n_loading_workers} loading workers."
         )
         if n_frames_per_worker < self.min_frames_per_worker:
             n_frames_per_worker = self.min_frames_per_worker
             n_loading_workers = int(np.ceil(self.n_frames_total / n_frames_per_worker))
-            self._logger.info(
+            logger.info(
                 f"n_frames_per_worker is less than "
                 f"self.min_frames_per_worker ({self.min_frames_per_worker}). "
                 f"This will result in many workers working on not so much data, "
@@ -325,11 +322,8 @@ class VideoCollectionDataLoader(DataLoader):
     def __init__(
         self,
         dataset: VideoCollectionDataset,
-        logger: logging.Logger | None = None,
         **kwargs,
     ):
-        self._logger = logger if logger is not None else logging.getLogger(__name__)
-
         if not isinstance(dataset, VideoCollectionDataset):
             raise ValueError(
                 "VideoCollectionDataLoader only works with VideoCollectionDataset."
@@ -374,7 +368,6 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         use_cached_video_metadata: bool = True,
         n_frame_counting_workers: int = -1,
         min_frames_per_worker: int = 300,
-        logger: logging.Logger | None = None,
         **kwargs,
     ):
         """Easier parallel video loading API if you don't care too much about the
@@ -384,10 +377,6 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         Arguments are those for `VideoCollectionDataset.__init__`, plus what you would
         normally pass to `torch.utils.data.DataLoader.__init__` (as keyword arguments).
         """
-
-        if logger is None:
-            logger = logging.getLogger(__name__)
-
         dataset = VideoCollectionDataset(
             paths,
             as_image_dirs=as_image_dirs,
@@ -398,11 +387,10 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
             use_cached_video_metadata=use_cached_video_metadata,
             n_frame_counting_workers=n_frame_counting_workers,
             min_frames_per_worker=min_frames_per_worker,
-            logger=logger,
         )
         num_workers = kwargs.get("num_workers", 0)  # 0 is normal DataLoader default
-        kwargs["num_workers"] = _resolve_n_workers_spec(num_workers, logger)
-        super().__init__(dataset, logger=logger, **kwargs)
+        kwargs["num_workers"] = _resolve_n_workers_spec(num_workers)
+        super().__init__(dataset, **kwargs)
 
 
 def _get_frame_idx_from_filename(filename: str, regex_pattern: str) -> int:
@@ -422,7 +410,7 @@ def _get_frame_idx_from_filename(filename: str, regex_pattern: str) -> int:
         ) from e
 
 
-def _resolve_n_workers_spec(n_workers: int, logger: logging.Logger) -> int:
+def _resolve_n_workers_spec(n_workers: int) -> int:
     """Resolve number of workers from user specification. If -1, use all available
     cores, if -2, use all but one core, etc. If 0, set to 1 (we don't separately
     implement doing the work in the main thread/process; a single child will be used).
