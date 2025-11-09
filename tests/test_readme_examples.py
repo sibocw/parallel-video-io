@@ -14,6 +14,8 @@ from pvio.torch import (
     VideoCollectionDataset,
     VideoCollectionDataLoader,
     SimpleVideoCollectionLoader,
+    EncodedVideo,
+    ImageDirVideo,
 )
 
 from .test_utils import make_frames_with_stride
@@ -83,13 +85,13 @@ def test_readme_example_writing_video(tmp_path: Path):
 def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
     """Test the 'Using the PyTorch dataset and dataloader' example from README."""
     # Create test data
-    video1 = tmp_path / "video1.mp4"
-    video2 = tmp_path / "video2.mp4"
+    video1_path = tmp_path / "video1.mp4"
+    video2_path = tmp_path / "video2.mp4"
     frames_dir1 = tmp_path / "frames_dir1"
     frames_dir2 = tmp_path / "frames_dir2"
 
-    write_frames_to_video(video1, make_frames_with_stride(20, stride=10), fps=10.0)
-    write_frames_to_video(video2, make_frames_with_stride(15, stride=10), fps=10.0)
+    write_frames_to_video(video1_path, make_frames_with_stride(20, stride=10), fps=10.0)
+    write_frames_to_video(video2_path, make_frames_with_stride(15, stride=10), fps=10.0)
 
     frames_dir1.mkdir()
     frames_dir2.mkdir()
@@ -103,29 +105,36 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
         imageio.imwrite(frames_dir2 / f"frame_{i:03d}.png", img)
 
     # Example from README:
-    # Initialize Dataset from video files
-    paths = [video1, video2]
-    ds = VideoCollectionDataset(paths)
+    # Create Video objects for video files
+    video1 = EncodedVideo(video1_path)
+    video2 = EncodedVideo(video2_path)
+    ds = VideoCollectionDataset([video1, video2])
 
     # ... or from directories containing individual frames as images
-    paths = [frames_dir1, frames_dir2]
-    ds = VideoCollectionDataset(paths, as_image_dirs=True)
+    # (hint: you can use a custom regular expression to control how frame IDs are parsed)
+    video3 = ImageDirVideo(frames_dir1)
+    video4 = ImageDirVideo(frames_dir2, frameid_regex=r"frame\D*(\d+)(?!\d)")
+    ds = VideoCollectionDataset([video3, video4])
 
-    # You can optionally provide a transform function
+    # You can optionally provide a transform function that will be applied to each frame
+    # after loading (applied to CHW float tensors in [0, 1])
+    # (hint: these can also be from torchvision.transforms)
     def my_transform(frame):
         return frame * 2.0  # example: double pixel values
+    ds = VideoCollectionDataset([video1, video2], transform=my_transform)
 
-    ds = VideoCollectionDataset(paths, as_image_dirs=True, transform=my_transform)
+    # You can set a buffer_size parameter when creating EncodedVideo objects. 
+    # This is the number of frames to decode at once (default 64).
+    # Larger buffer size = faster loading at the cost of memory usage.
+    video_with_buffer = EncodedVideo(video1_path, buffer_size=128)
+    ds = VideoCollectionDataset([video_with_buffer])
 
-    # You can also set a buffer_size parameter
-    ds = VideoCollectionDataset([video1, video2], buffer_size=64)
+    # Wrap dataset in a DataLoader
+    # (you can add other torch.utils.data.DataLoader keyword arguments if you wish)
+    loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=0)  # Use 0 workers for testing
 
-    # Wrap in the special DataLoader
-    loader = VideoCollectionDataLoader(
-        ds, batch_size=8, num_workers=0
-    )  # Use 0 workers for testing
-
-    # Now you can iterate over all frames from all videos
+    # Now you can iterate over all frames from all videos in a single iterator. Behind the
+    # scenes, frames are distributed across workers for efficient parallel loading
     for batch in loader:
         frames = batch["frames"]  # torch.Tensor: B x C x H x W
         video_indices = batch["video_indices"]  # list of int (video indices)
@@ -141,23 +150,36 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
 
 def test_readme_example_simple_video_collection_loader(tmp_path: Path):
     """Test the 'Using the SimpleVideoCollectionLoader' example from README."""
-    # Create test videos
-    video1 = tmp_path / "video1.mp4"
-    video2 = tmp_path / "video2.mp4"
-    write_frames_to_video(video1, make_frames_with_stride(20, stride=10), fps=10.0)
-    write_frames_to_video(video2, make_frames_with_stride(15, stride=10), fps=10.0)
+    # Create test data
+    video1_path = tmp_path / "video1.mp4"
+    video2_path = tmp_path / "video2.mp4"
+    dir1_path = tmp_path / "dir1"
+    
+    write_frames_to_video(video1_path, make_frames_with_stride(20, stride=10), fps=10.0)
+    write_frames_to_video(video2_path, make_frames_with_stride(15, stride=10), fps=10.0)
+    
+    dir1_path.mkdir()
+    import imageio.v2 as imageio
+    for i in range(8):
+        img = np.full((32, 32, 3), fill_value=i * 10, dtype=np.uint8)
+        imageio.imwrite(dir1_path / f"frame_{i:03d}.png", img)
 
     def my_transform(frame):
         return frame * 2.0  # example: double pixel values
 
     # Example from README:
-    # All VideoCollectionDataset parameters, plus DataLoader parameters in one step
+    # Supply all Video backend parameters, VideoCollectionDataset parameters, and DataLoader
+    # parameters in one call.
+    # Video specification can be mixed: path to real videos, path to directories of images,
+    # and pre-created Video objects are all allowed.
+    videos = [str(video1_path), str(dir1_path), EncodedVideo(video2_path)]
     loader = SimpleVideoCollectionLoader(
-        [video1, video2],
+        videos,
         batch_size=8,
         num_workers=0,  # Use 0 workers for testing
         transform=my_transform,  # optional
-        buffer_size=64,  # optional
+        buffer_size=64,  # optional (for video files)
+        frameid_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
     )
 
     for batch in loader:

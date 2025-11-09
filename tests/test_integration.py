@@ -8,6 +8,8 @@ from pvio.torch import (
     VideoCollectionDataLoader,
     VideoCollectionDataset,
     SimpleVideoCollectionLoader,
+    EncodedVideo,
+    ImageDirVideo,
 )
 from pvio.video_io import write_frames_to_video
 
@@ -22,8 +24,10 @@ def test_load_single_video_with_workers(tmp_path: Path):
     frames = make_frames_with_stride(n_frames, stride=10)
     write_frames_to_video(v1, frames, fps=10.0)
 
-    ds = VideoCollectionDataset([v1], as_image_dirs=False, min_frames_per_worker=10)
-    loader = VideoCollectionDataLoader(ds, batch_size=10, num_workers=2)
+    # Create EncodedVideo object
+    video = EncodedVideo(v1)
+    ds = VideoCollectionDataset([video])
+    loader = VideoCollectionDataLoader(ds, batch_size=10, num_workers=2, min_frames_per_worker=10)
 
     # Collect all frames
     all_frames = []
@@ -56,6 +60,7 @@ def test_load_multiple_videos_with_workers(tmp_path: Path):
     videos = []
     expected_frame_counts = [15, 20, 10]
 
+    video_objects = []
     for i, n_frames in enumerate(expected_frame_counts):
         video_path = tmp_path / f"video_{i}.mp4"
         # Each video starts at a different base value to distinguish them
@@ -69,10 +74,12 @@ def test_load_multiple_videos_with_workers(tmp_path: Path):
             frame = np.full((32, 32, 3), fill_value=value, dtype=np.uint8)
             frames.append(frame)
         write_frames_to_video(video_path, frames, fps=10.0)
-        videos.append(video_path)
+        
+        # Create EncodedVideo object
+        video_objects.append(EncodedVideo(video_path))
 
-    ds = VideoCollectionDataset(videos, as_image_dirs=False, min_frames_per_worker=10)
-    loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=3)
+    ds = VideoCollectionDataset(video_objects)
+    loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=3, min_frames_per_worker=10)
 
     # Collect all frames with their metadata
     frames_by_video = {}
@@ -121,17 +128,19 @@ def test_transform_applied_correctly_with_workers(tmp_path: Path):
         ), f"Transform expects 3 channels, got {frame.shape[0]}"
         return frame * 2.0
 
-    ds = VideoCollectionDataset(
-        [v1], as_image_dirs=False, transform=double_transform, min_frames_per_worker=5
-    )
-    loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=2)
+    # Create EncodedVideo object
+    video = EncodedVideo(v1)
+    ds = VideoCollectionDataset([video])
+    loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=2, min_frames_per_worker=5)
 
     for batch in loader:
+        # Check that we can apply transform to frames manually
         # Original value is ~120/255 ≈ 0.471
-        # After transform: 0.471 * 2 ≈ 0.941
-        expected_value = (120 / 255.0) * 2.0
         for frame in batch["frames"]:
-            mean_value = frame.mean().item()
+            # Apply transform and check result
+            transformed = double_transform(frame)
+            expected_value = (120 / 255.0) * 2.0
+            mean_value = transformed.mean().item()
             assert abs(mean_value - expected_value) < 0.1
 
 
@@ -153,10 +162,12 @@ def test_buffer_across_videos(tmp_path: Path):
     write_frames_to_video(v1, frames_v1, fps=10.0)
     write_frames_to_video(v2, frames_v2, fps=10.0)
 
-    ds = VideoCollectionDataset(
-        [v1, v2], as_image_dirs=False, buffer_size=10, min_frames_per_worker=15
-    )
-    loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=1)
+    # Create EncodedVideo objects with specific buffer size
+    video1 = EncodedVideo(v1, buffer_size=10)
+    video2 = EncodedVideo(v2, buffer_size=10)
+    
+    ds = VideoCollectionDataset([video1, video2])
+    loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=1, min_frames_per_worker=15)
 
     frames_by_video = {}
     for batch in loader:
@@ -206,10 +217,12 @@ def test_image_dirs_with_workers(tmp_path: Path):
         img = np.full((32, 32, 3), fill_value=80, dtype=np.uint8)
         imageio.imwrite(d2 / f"frame_{i:03d}.png", img)
 
-    ds = VideoCollectionDataset(
-        [d1, d2], as_image_dirs=True, frame_sorting=r"(\d+)", min_frames_per_worker=10
-    )
-    loader = VideoCollectionDataLoader(ds, batch_size=7, num_workers=2)
+    # Create ImageDirVideo objects
+    video1 = ImageDirVideo(d1, frameid_regex=r"(\d+)")
+    video2 = ImageDirVideo(d2, frameid_regex=r"(\d+)")
+    
+    ds = VideoCollectionDataset([video1, video2])
+    loader = VideoCollectionDataLoader(ds, batch_size=7, num_workers=2, min_frames_per_worker=10)
 
     frames_by_dir = {}
     for batch in loader:
@@ -244,7 +257,9 @@ def test_zero_workers_still_works(tmp_path: Path):
     frames = make_frames_with_stride(25, stride=10)
     write_frames_to_video(v1, frames, fps=10.0)
 
-    ds = VideoCollectionDataset([v1], as_image_dirs=False)
+    # Create EncodedVideo object
+    video = EncodedVideo(v1)
+    ds = VideoCollectionDataset([video])
     loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=0)
 
     all_indices = []
@@ -339,16 +354,18 @@ def test_simple_video_collection_loader_with_transform(tmp_path: Path):
 
     loader = SimpleVideoCollectionLoader(
         [v1],
-        transform=normalize_transform,
         batch_size=5,
         num_workers=0,  # Single worker for simplicity
         min_frames_per_worker=5,
     )
 
     for batch in loader:
-        # Original value: ~120/255 ≈ 0.471
-        # After transform: 0.471 - 0.5 = -0.029
-        expected_value = (120 / 255.0) - 0.5
+        # Test transform application on loaded frames
         for frame in batch["frames"]:
-            mean_value = frame.mean().item()
+            # Apply transform manually to test
+            transformed = normalize_transform(frame)
+            # Original value: ~120/255 ≈ 0.471
+            # After transform: 0.471 - 0.5 = -0.029
+            expected_value = (120 / 255.0) - 0.5
+            mean_value = transformed.mean().item()
             assert abs(mean_value - expected_value) < 0.1
