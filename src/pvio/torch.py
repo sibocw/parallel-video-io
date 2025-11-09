@@ -3,7 +3,7 @@ import logging
 import re
 import imageio.v2 as imageio
 import numpy as np
-from abc import abstractmethod
+from abc import abstractmethod, ABC
 from sys import stderr
 from multiprocessing import cpu_count
 from time import time
@@ -20,7 +20,7 @@ from .video_io import get_video_metadata
 logger = logging.getLogger(__name__)
 
 
-class Video:
+class Video(ABC):
     def __init__(
         self,
         path: Path | str,
@@ -228,7 +228,7 @@ class EncodedVideo(Video):
         return n_frames_total, frame_size, fps
 
     def _read_frame(self, index: int, transform: Callable | None) -> torch.Tensor:
-        # It this is the first tiem reading from this video, initialize the decoder
+        # If this is the first time reading from this video, initialize the decoder
         if self._decoder is None:
             self._decoder = VideoDecoder(
                 self.path.as_posix(), seek_mode="exact", dimension_order="NCHW"
@@ -241,8 +241,9 @@ class EncodedVideo(Video):
 
         # Otherwise, expunge & refill buffer
         # (load many frames at once to reduce decoding overhead)
-        last_buffer_idx = min(index + self.buffer_size, self.frame_range_effective[1])
-        buffer_virtual_frameids = np.arange(index, last_buffer_idx)
+        self._buffer.clear()
+        buffer_until = min(index + self.buffer_size, self.frame_range_effective[1])
+        buffer_virtual_frameids = np.arange(index, buffer_until)
         buffer_real_frameids = buffer_virtual_frameids + self.frame_range_effective[0]
         batch_frames = self._decoder.get_frames_at(buffer_real_frameids).data  # NCHW
         batch_frames = batch_frames.float() / 255.0  # normalize to [0, 1]
@@ -426,8 +427,8 @@ class VideoCollectionDataset(IterableDataset):
         # the caches that we've just generated
         for video in self.videos:
             if isinstance(video, EncodedVideo) and not video.use_cached_metadata:
-                logging.info(
-                    "For efficiency, `use_cached_metadata` is must be set to True for "
+                logger.info(
+                    "For efficiency, `use_cached_metadata` must be set to True for "
                     "all EncodedVideo objects when they are managed by "
                     "VideoCollectionDataset. Overriding to True."
                 )
