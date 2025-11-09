@@ -12,8 +12,8 @@ def read_frames_from_video(
 
     Args:
         video_path (Path | str): Path to the video file.
-        frame_indices (list[int] | None): List of frame indices to read.
-            If None, read all frames.
+        frame_indices (list[int] | None): List of frame indices to read. If None, read
+            all frames.
 
     Raises:
         ValueError: If the video file cannot be read.
@@ -52,7 +52,7 @@ def write_frames_to_video(
     codec: str = "libx264",
     ffmpeg_params: list[str] = _default_ffmpeg_params_for_video_writing,
     log_interval: int | None = None,
-    log_level: int = logging.INFO,
+    logger: logging.Logger | None = None,
 ):
     """Write a sequence of frames to a video file.
 
@@ -62,13 +62,17 @@ def write_frames_to_video(
             [height, width, channels] format).
         fps (float): Frames per second for the output video.
         codec (str): Codec to use. Default: 'libx264'.
-        ffmpeg_params (list[str]): Additional ffmpeg parameters.
-            Default is a set of parameters for high-quality H.264 encoding.
-            (see _default_ffmpeg_params_for_video_writing).
-        log_interval (int | None): If set, log progress every
-            `log_interval` frames at the specified log level.
-        log_level (int): Logging level for progress. Default: logging.INFO.
+        ffmpeg_params (list[str]): Additional ffmpeg parameters. Default is a set of
+            parameters for high-quality H.264 encoding (see
+            _default_ffmpeg_params_for_video_writing).
+        log_interval (int | None): If set, log progress every `log_interval` frames
+            using the specified logger.
+        logger (logging.Logger | None): Logger to use for progress logging. If None, use
+            the logger from `__name__`.
     """
+    if logger is None:
+        logger = logging.getLogger(__name__)
+
     # Check frame size consistency
     if len(frames) == 0:
         raise ValueError("No frames provided to write_frames_to_video")
@@ -93,7 +97,7 @@ def write_frames_to_video(
             video_writer.append_data(frame)
 
             if log_interval is not None and i % log_interval == 0:
-                logging.log(log_level, f"Written frame {i + 1}/{len(frames)}")
+                logger.info(f"Written frame {i + 1}/{len(frames)}")
 
 
 def check_num_frames(video_path: Path | str) -> int:
@@ -111,25 +115,30 @@ def get_video_metadata(
     cache_metadata: bool = True,
     use_cached_metadata: bool = True,
     metadata_suffix: str = ".metadata.json",
+    logger: logging.Logger | None = None,
 ):
     """Get number of frames, frame size, and FPS of a video file.
 
     Args:
         video_path (Path | str): Path to the video file.
-        cache_metadata (bool): Whether to cache the metadata to a JSON
-            file. Default is True.
-        use_cached_metadata (bool): Whether to use cached metadata if
-            available. Default is True.
-        metadata_suffix (str): Suffix to use for the metadata cache file.
-            Default is ".metadata.json".
+        cache_metadata (bool): Whether to cache the metadata to a JSON file. Default is
+            True.
+        use_cached_metadata (bool): Whether to use cached metadata if available. Default
+            is True.
+        metadata_suffix (str): Suffix to use for the metadata cache file. Default is
+            ".metadata.json".
+        logger (logging.Logger | None): Logger to use for logging. If None, use the
+            logger from `__name__`.
 
     Returns:
         dict: A dictionary containing the video metadata.
     """
-    metadata = {}
+    if logger is None:
+        logger = logging.getLogger(__name__)
 
     video_path = Path(video_path)
     cache_path = video_path.with_suffix(metadata_suffix)
+    metadata = {}
     if use_cached_metadata and cache_path.is_file():
         try:
             with open(cache_path, "r") as f:
@@ -138,13 +147,11 @@ def get_video_metadata(
             frame_size = tuple(metadata["frame_size"])
             fps = metadata["fps"]
         except Exception as e:
-            print(f"Corrupted metadata cache file {cache_path}")
+            logger.critical(f"Corrupted metadata cache file {cache_path}")
             raise e
     else:
         n_frames = check_num_frames(video_path)
-        sample_frames, fps = read_frames_from_video(
-            video_path, frame_indices=[0]
-        )
+        sample_frames, fps = read_frames_from_video(video_path, frame_indices=[0])
         frame_size = sample_frames[0].shape[:2]
 
         if cache_metadata:
