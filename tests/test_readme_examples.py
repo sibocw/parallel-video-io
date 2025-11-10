@@ -111,33 +111,26 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
     ds = VideoCollectionDataset([video1, video2])
 
     # ... or from directories containing individual frames as images
-    # (hint: you can use a custom regular expression to control how frame IDs are parsed)
     video3 = ImageDirVideo(frames_dir1)
-    video4 = ImageDirVideo(frames_dir2, frameid_regex=r"frame\D*(\d+)(?!\d)")
+    video4 = ImageDirVideo(frames_dir2, frame_id_regex=r"frame\D*(\d+)(?!\d)")
     ds = VideoCollectionDataset([video3, video4])
 
-    # You can optionally provide a transform function that will be applied to each frame
-    # after loading (applied to CHW float tensors in [0, 1])
-    # (hint: these can also be from torchvision.transforms)
+    # You can optionally provide a transform functio
     def my_transform(frame):
         return frame * 2.0  # example: double pixel values
 
     ds = VideoCollectionDataset([video1, video2], transform=my_transform)
 
     # You can set a buffer_size parameter when creating EncodedVideo objects.
-    # This is the number of frames to decode at once (default 64).
-    # Larger buffer size = faster loading at the cost of memory usage.
     video_with_buffer = EncodedVideo(video1_path, buffer_size=128)
     ds = VideoCollectionDataset([video_with_buffer])
 
     # Wrap dataset in a DataLoader
-    # (you can add other torch.utils.data.DataLoader keyword arguments if you wish)
     loader = VideoCollectionDataLoader(
         ds, batch_size=8, num_workers=0
     )  # Use 0 workers for testing
 
-    # Now you can iterate over all frames from all videos in a single iterator. Behind the
-    # scenes, frames are distributed across workers for efficient parallel loading
+    # Now you can iterate over the entire dataset in batches through a single interator
     for batch in loader:
         frames = batch["frames"]  # torch.Tensor: B x C x H x W
         video_indices = batch["video_indices"]  # list of int (video indices)
@@ -170,20 +163,20 @@ def test_readme_example_simple_video_collection_loader(tmp_path: Path):
         return frame * 2.0  # example: double pixel values
 
     # Example from README:
-    # Supply all Video backend parameters, VideoCollectionDataset parameters, and DataLoader
-    # parameters in one call.
     # Video specification can be mixed: path to real videos, path to directories of images,
     # and pre-created Video objects are all allowed.
     videos = [str(video1_path), str(dir1_path), EncodedVideo(video2_path)]
+
     loader = SimpleVideoCollectionLoader(
         videos,
         batch_size=8,
         num_workers=0,  # Use 0 workers for testing
         transform=my_transform,  # optional
         buffer_size=64,  # optional (for video files)
-        frameid_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
+        frame_id_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
     )
 
+    # Iterate over the entire dataset in batches through a single interator
     for batch in loader:
         frames = batch["frames"]  # torch.Tensor: B x C x H x W
         video_indices = batch["video_indices"]  # list of int (video indices)

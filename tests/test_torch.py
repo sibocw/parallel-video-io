@@ -46,7 +46,7 @@ def create_test_video(path: Path, n_frames: int = 15) -> Path:
 # Core functionality tests
 def test_frame_extraction_parsing():
     """Test frame number extraction from filenames."""
-    parse = ImageDirVideo._parse_frameid_from_filename
+    parse = ImageDirVideo._parse_frame_id_from_filename
 
     # Successful extractions
     assert parse("img_001.png", r"(\d+)") == 1
@@ -93,16 +93,23 @@ def test_image_directory_handling(tmp_path: Path):
     d1 = tmp_path / "frames1"
     create_test_images(d1, 3, use_regex_pattern=False)
 
-    video = ImageDirVideo(d1, frameid_regex=None)
-    paths = [video.frameid_to_path[i] for i in sorted(video.frameid_to_path.keys())]
+    video = ImageDirVideo(d1, frame_id_regex=None)
+    video.setup()  # Need to call setup to populate phy_frame_id_to_path
+    paths = [
+        video.phy_frame_id_to_path[i] for i in sorted(video.phy_frame_id_to_path.keys())
+    ]
     assert [p.name for p in paths] == ["a.png", "b.png", "c.png"]
 
     # Test regex-based sorting
     d2 = tmp_path / "frames2"
     create_test_images(d2, 3, "frame")
 
-    video2 = ImageDirVideo(d2, frameid_regex=r"(\d+)")
-    paths2 = [video2.frameid_to_path[i] for i in sorted(video2.frameid_to_path.keys())]
+    video2 = ImageDirVideo(d2, frame_id_regex=r"(\d+)")
+    video2.setup()  # Need to call setup to populate phy_frame_id_to_path
+    paths2 = [
+        video2.phy_frame_id_to_path[i]
+        for i in sorted(video2.phy_frame_id_to_path.keys())
+    ]
     assert [p.name for p in paths2] == [
         "frame_000.png",
         "frame_001.png",
@@ -123,7 +130,7 @@ def test_video_object_creation():
         tmp_path = Path(tmp_dir)
         create_test_images(tmp_path, 1, "frame")
 
-        video2 = ImageDirVideo(tmp_path, frameid_regex=r"(\d+)")
+        video2 = ImageDirVideo(tmp_path, frame_id_regex=r"(\d+)")
         assert video2.path == tmp_path
 
 
@@ -197,7 +204,7 @@ def test_simple_video_collection_loader(tmp_path: Path):
         [video_file, image_dir],
         batch_size=8,
         num_workers=0,
-        frameid_regex=r"(\d+)",
+        frame_id_regex=r"(\d+)",
         min_frames_per_worker=5,
     )
 

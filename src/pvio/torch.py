@@ -116,9 +116,14 @@ class Video(ABC):
     def read_frame(
         self, index: int, transform: Callable | None = None, *args, **kwargs
     ) -> torch.Tensor:
-        """Read a single frame at the specified index. This is a wrapper around the
-        actual `._read_frame()` method implemented by the backend subclass. A transform
-        can be supplied to modify the frame after reading."""
+        """Read a single frame at the specified index. A transform can be supplied to
+        modify the frame after reading.
+
+        Note: `index` here is the **virtual** frame index, i.e. the index is 0 at the
+        start of the effective frame range.
+
+        This is a wrapper around the actual `._read_frame()` method implemented by the
+        backend subclass."""
         if not self.__setup_done:
             logger.warning(
                 f"Video at path {self.path} is not set up yet. Call `.setup()` first. "
@@ -149,10 +154,8 @@ class Video(ABC):
         """Read a single frame at the specified index. An optional `transform` argument
         must be supported. Returns the frame as a torch Tensor.
 
-        IMPORTANT: `index` here is the **virtual** frame index, i.e. it is counted from
-        0 and relative to the start of the effective frame range. For example, if the
-        actual video has 100 frames and frame_range=(10, 20), then index 0 corresponds
-        to frame 10 of the actual video.
+        IMPORTANT: `index` here is the **virtual** frame index, i.e. the index is 0 at
+        the start of the effective frame range.
 
         This method will be wrapped by the public `.read_frame()` method.
         """
@@ -234,26 +237,31 @@ class EncodedVideo(Video):
                 self.path.as_posix(), seek_mode="exact", dimension_order="NCHW"
             )
 
-        # If requested frame is already in buffer, return it directly
-        # NOTE: the buffer always uses **virtual** frame IDs!
-        if index in self._buffer:
-            return self._buffer[index]
+        vir_frame_id = index  # `index` is the virtual frame_id - make alias for clarity
 
-        # Otherwise, expunge & refill buffer
-        # (load many frames at once to reduce decoding overhead)
+        # If requested frame is already in buffer, return it directly
+        if vir_frame_id in self._buffer:
+            return self._buffer[vir_frame_id]
+
+        # Buffer has expired - expunge & refill
+        # (loading many frames at once reduces decoding overhead)
         self._buffer.clear()
-        idx_to_buffer_until = min(index + self.buffer_size, self.n_frames_in_range)
-        buffer_virtual_frameids = np.arange(index, idx_to_buffer_until)
-        buffer_real_frameids = buffer_virtual_frameids + self.frame_range_effective[0]
-        batch_frames = self._decoder.get_frames_at(buffer_real_frameids).data  # NCHW
+        buffer_vir_frame_id_limit = min(
+            vir_frame_id + self.buffer_size, self.n_frames_in_range
+        )
+        vir_frame_ids_to_buffer = np.arange(vir_frame_id, buffer_vir_frame_id_limit)
+        phy_frame_ids_to_buffer = (
+            vir_frame_ids_to_buffer + self.frame_range_effective[0]
+        )
+        batch_frames = self._decoder.get_frames_at(phy_frame_ids_to_buffer).data  # NCHW
         batch_frames = batch_frames.float() / 255.0  # normalize to [0, 1]
-        for i, virtual_idx in enumerate(buffer_virtual_frameids):
+        for i, _vfid in enumerate(vir_frame_ids_to_buffer):
             frame = batch_frames[i, ...]
             if transform is not None:
                 frame = transform(frame)
-            self._buffer[virtual_idx] = frame
+            self._buffer[_vfid] = frame
 
-        return self._buffer[index]
+        return self._buffer[vir_frame_id]
 
     def close(self):
         # VideoDecoder from torchcodec doesn't have a "close" method - just let Python
@@ -266,7 +274,7 @@ class ImageDirVideo(Video):
         self,
         path: Path | str,
         frame_range: tuple[int, int] | None = None,
-        frameid_regex: str | re.Pattern | None = r"frame\D*(\d+)(?!\d)",
+        frame_id_regex: str | re.Pattern | None = r"frame\D*(\d+)(?!\d)",
     ):
         r"""Video backend for directories containing frames as individual images.
 
@@ -274,37 +282,24 @@ class ImageDirVideo(Video):
             path (Path | str): Path to the directory containing frames.
             frame_range (tuple[int, int] | None): If specified, only frames in this
                 range [start, end) are considered part of the video.
-            frameid_regex (str | re.Pattern | None): For each frame file, the frame
+            frame_id_regex (str | re.Pattern | None): For each frame file, the frame
                 index is parsed from the filename using this regular expression. The
                 default r"frame\D*(\d+)(?!\d)" is a pretty powerful one: it can broadly
                 handle filenames like "frame1.jpg", "frame002.tif", "frame_3.png",
-                "frame-4.bmp", "frameid=05.custom.suffix". If None, filenames are sorted
-                alphabetically and frame indices are assigned from 0.
+                "frame-4.bmp", "frame_id=05.custom.suffix". Use an online tool like
+                https://regex101.com/ to test your regex patterns. If None, filenames
+                are sorted alphabetically and frame indices are assigned from 0.
         """
         super().__init__(path, frame_range)
-
-        # Index frame paths by frameids
-        self.frameid_to_path: dict[int, Path] = {}
-        if frameid_regex is None:
-            all_paths = [f for f in self.path.iterdir() if f.is_file()]
-            all_paths.sort(key=lambda f: f.name)
-            for i, path in enumerate(all_paths):
-                self.frameid_to_path[i] = path
-        else:
-            if isinstance(frameid_regex, str):
-                frameid_regex = re.compile(frameid_regex)
-            _frameid_to_path = {
-                self._parse_frameid_from_filename(f.name, frameid_regex): f
-                for f in self.path.iterdir()
-                if f.is_file()
-            }
-            self.frameid_to_path = {
-                frameid: _frameid_to_path[frameid]
-                for frameid in sorted(_frameid_to_path.keys())
-            }
+        if frame_id_regex is not None and isinstance(frame_id_regex, str):
+            frame_id_regex = re.compile(frame_id_regex)
+        self.frame_id_regex: re.Pattern | None = frame_id_regex
+        self.phy_frame_id_to_path: dict[int, Path] = (
+            {}
+        )  # to be populated in _post_setup
 
     @staticmethod
-    def _parse_frameid_from_filename(
+    def _parse_frame_id_from_filename(
         filename: str, regex_pattern: re.Pattern | str
     ) -> int:
         """Extract frame index from filename using the provided regex pattern."""
@@ -333,12 +328,26 @@ class ImageDirVideo(Video):
         """Verify that all frame indices in the effective frame range are present. This
         has to be implemented in _post_setup because frame range is not resolved until
         this point."""
-        for index in range(*self.frame_range_effective):
-            if index not in self.frameid_to_path:
+        # Index frame paths by frame_ids
+        if self.frame_id_regex is None:
+            all_paths = [path for path in self.path.iterdir() if path.is_file()]
+            all_paths.sort(key=lambda f: f.name)
+            for i, path in enumerate(all_paths):
+                self.phy_frame_id_to_path[i] = path
+        elif isinstance(self.frame_id_regex, re.Pattern):
+            self.phy_frame_id_to_path = {
+                self._parse_frame_id_from_filename(path.name, self.frame_id_regex): path
+                for path in self.path.iterdir()
+                if path.is_file()
+            }
+
+        # Verify that all frame indices in the effective frame range are present
+        for phy_frame_id in range(*self.frame_range_effective):
+            if phy_frame_id not in self.phy_frame_id_to_path:
                 raise FileNotFoundError(
-                    f"Frame range {self.frame_range_effective} includes index {index}, "
-                    f"but frame index {index} is not found in image directory "
-                    f"{self.path} (which contains {len(self.frameid_to_path)} frames)."
+                    f"Frame range {self.frame_range_effective} covers frame index "
+                    f"{phy_frame_id}, but this frame is not found in image directory "
+                    f"{self.path}."
                 )
         return True
 
@@ -356,9 +365,12 @@ class ImageDirVideo(Video):
         return n_frames_total, frame_size, fps
 
     def _read_frame(self, index: int, transform: Callable | None) -> torch.Tensor:
-        physical_index = index + self.frame_range_effective[0]
-        assert physical_index in self.frameid_to_path, f"Frame index {index} not found"
-        frame_path = self.frameid_to_path[physical_index]
+        vir_frame_id = index  # `index` is the virtual frame_id - make alias for clarity
+        phy_frame_id = vir_frame_id + self.frame_range_effective[0]
+        assert (
+            phy_frame_id in self.phy_frame_id_to_path
+        ), f"Frame index {index} not found"
+        frame_path = self.phy_frame_id_to_path[phy_frame_id]
         frame = imageio.imread(frame_path)
         frame = torch.from_numpy(frame)
         if frame.ndim == 2:
@@ -445,12 +457,12 @@ class VideoCollectionDataset(IterableDataset):
         self.n_frames_by_video = [len(video) for video in self.videos]
         self.n_frames_total = sum(self.n_frames_by_video)
 
-        # Initialize attributes for worker assignment and buffering during loading
-        # worker assignment format: (video_idx, start_frameid, end_frameid). Start and
-        # end frameids are counted from 0 - if the video object has a frame_range, this
-        # frameid would be relative to the start of that range.
-        # This will be properly initialized in `.assign_workers`
+        # Initialize attributes for worker assignment - to be filled in .assign_workers
+        # The i-th worker's assignments are self.worker_assignments[i], which is a list
+        # of (video_id, start_vir_frame_id, end_vir_frame_id) tuples.
         self.worker_assignments: list[list[tuple[int, int, int]]] = []
+
+        # Buffers for storing frames during loading, indexed by virtual frame_id
         self._frames_buffer: dict[tuple[int, int], torch.Tensor] = {}
 
     def assign_workers(
@@ -472,17 +484,17 @@ class VideoCollectionDataset(IterableDataset):
                 the number of workers is reduced to meet this minimum. This helps avoid
                 excessive overhead from too many workers on small datasets.
         """
-        # Make a giant array of (video_idx, frameid) pairs. frameid is counted from 0
-        # and relative to video.frame_range_effective[0]
+        # Make an array of (video_id, vir_frame_id) pairs. frame_id is virtual (i.e.
+        # index 0 corresponds to physical frame_id=frame_range[0])
         frame_specs_all = -np.ones((self.n_frames_total, 2), dtype=np.int32)
-        curr_frameid_global = 0
-        for vid_idx, n_frames in enumerate(self.n_frames_by_video):
-            end_frameid_global = curr_frameid_global + n_frames
-            frameids_local = np.arange(n_frames)
-            frame_specs_all[curr_frameid_global:end_frameid_global, 0] = vid_idx
-            frame_specs_all[curr_frameid_global:end_frameid_global, 1] = frameids_local
-            curr_frameid_global = end_frameid_global
-        assert curr_frameid_global == self.n_frames_total
+        start_global_frame_id = 0
+        for video_id, n_frames in enumerate(self.n_frames_by_video):
+            end_global_frame_id = start_global_frame_id + n_frames
+            local_vfids = np.arange(n_frames)
+            frame_specs_all[start_global_frame_id:end_global_frame_id, 0] = video_id
+            frame_specs_all[start_global_frame_id:end_global_frame_id, 1] = local_vfids
+            start_global_frame_id = end_global_frame_id
+        assert start_global_frame_id == self.n_frames_total
         assert not np.any(frame_specs_all == -1)
 
         # Dynamically balance load among workers
@@ -506,25 +518,26 @@ class VideoCollectionDataset(IterableDataset):
         self.worker_assignments = [[] for _ in range(n_loading_workers)]
 
         for worker_id in range(n_loading_workers):
-            start_idx = worker_id * n_frames_per_worker
-            end_idx = min(start_idx + n_frames_per_worker, self.n_frames_total)
-            frame_specs = frame_specs_all[start_idx:end_idx, :]
-            # Convert to list of (video_idx, start_frameid, end_frameid)
-            # start/end frame IDs are **virtual** indices relative to frame_range[0]
-            if frame_specs.shape[0] == 0:
+            start_global_frame_id = worker_id * n_frames_per_worker
+            end_global_frame_id = min(
+                start_global_frame_id + n_frames_per_worker, self.n_frames_total
+            )
+            my_specs = frame_specs_all[start_global_frame_id:end_global_frame_id, :]
+            # Convert to list of (video_id, start_vir_frame_id, end_vir_frame_id)
+            if my_specs.shape[0] == 0:
                 continue
-            unique_video_idxs = np.unique(frame_specs[:, 0])
-            for vid_idx in unique_video_idxs:
-                frameids_local = frame_specs[frame_specs[:, 0] == vid_idx, 1]
-                start_frameid = frameids_local[0]
-                end_frameid = frameids_local[-1] + 1  # exclusive
+            unique_video_ids = np.unique(my_specs[:, 0])
+            for video_id in unique_video_ids:
+                vir_frame_ids_local = my_specs[my_specs[:, 0] == video_id, 1]
+                start_vir_frame_id = vir_frame_ids_local[0]
+                end_vir_frame_id = vir_frame_ids_local[-1] + 1  # exclusive
                 self.worker_assignments[worker_id].append(
-                    (vid_idx, start_frameid, end_frameid)
+                    (video_id, start_vir_frame_id, end_vir_frame_id)
                 )
         _nframes_total_check = 0
         for worker_chunks in self.worker_assignments:
-            for _, start_frameid, end_frameid in worker_chunks:
-                _nframes_total_check += end_frameid - start_frameid
+            for _, start_vir_frame_id, end_vir_frame_id in worker_chunks:
+                _nframes_total_check += end_vir_frame_id - start_vir_frame_id
         assert _nframes_total_check == self.n_frames_total, "Frame count mismatch."
 
     def __iter__(self):
@@ -541,11 +554,11 @@ class VideoCollectionDataset(IterableDataset):
             my_chunks = self.worker_assignments[worker_info.id]
 
         # Each worker sequentially decodes its assigned videos
-        for video_idx, start_frame_idx, end_frame_idx in my_chunks:
-            video = self.videos[video_idx]
-            for frame_idx in range(start_frame_idx, end_frame_idx):
-                frame = video.read_frame(frame_idx, transform=self.transform)
-                yield {"frame": frame, "video_idx": video_idx, "frame_idx": frame_idx}
+        for video_id, start_vir_frame_id, end_vir_frame_id in my_chunks:
+            video = self.videos[video_id]
+            for vir_frame_id in range(start_vir_frame_id, end_vir_frame_id):
+                frame = video.read_frame(vir_frame_id, transform=self.transform)
+                yield {"frame": frame, "video_id": video_id, "frame_id": vir_frame_id}
 
     def __len__(self):
         return self.n_frames_total
@@ -611,8 +624,8 @@ class VideoCollectionDataLoader(DataLoader):
         """Receives a list of frame dicts, returns a batched dict"""
         return {
             "frames": torch.stack([item["frame"] for item in batch]),
-            "video_indices": [item["video_idx"] for item in batch],
-            "frame_indices": [item["frame_idx"] for item in batch],
+            "video_indices": [item["video_id"] for item in batch],
+            "frame_indices": [item["frame_id"] for item in batch],
         }
 
 
@@ -623,7 +636,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         *,
         transform: Callable | None = None,
         buffer_size: int = 64,
-        frameid_regex: str | re.Pattern | None = r"frame\D*(\d+)(?!\d)",
+        frame_id_regex: str | re.Pattern | None = r"frame\D*(\d+)(?!\d)",
         use_cached_video_metadata: bool = True,
         n_frame_counting_workers: int = -1,
         progress_bar: bool | None = None,
@@ -650,7 +663,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         video_objects = self._resolve_videos(
             videos,
             buffer_size=buffer_size,
-            frameid_regex=frameid_regex,
+            frame_id_regex=frame_id_regex,
             use_cached_video_metadata=use_cached_video_metadata,
         )
 
@@ -673,7 +686,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
     def _resolve_videos(
         video_specs: list[Video | Path | str],
         buffer_size: int,
-        frameid_regex: str | re.Pattern | None,
+        frame_id_regex: str | re.Pattern | None,
         use_cached_video_metadata: bool,
     ) -> list[Video]:
         videos_resolved = []
@@ -686,7 +699,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
                     logger.info(
                         f"Using ImageDirVideo backend for path {path}, which is a dir."
                     )
-                    video = ImageDirVideo(path, frameid_regex=frameid_regex)
+                    video = ImageDirVideo(path, frame_id_regex=frame_id_regex)
                 elif path.is_file():
                     logger.info(
                         f"Using EncodedVideo backend for path {path}, which is a file."

@@ -125,8 +125,8 @@ def test_image_directories_parallel_loading(tmp_path: Path):
     create_test_image_dir(dir2, 15, fill_value=80)
 
     videos = [
-        ImageDirVideo(dir1, frameid_regex=r"(\d+)"),
-        ImageDirVideo(dir2, frameid_regex=r"(\d+)"),
+        ImageDirVideo(dir1, frame_id_regex=r"(\d+)"),
+        ImageDirVideo(dir2, frame_id_regex=r"(\d+)"),
     ]
 
     ds = VideoCollectionDataset(videos)
@@ -271,7 +271,7 @@ def test_simple_video_collection_loader_integration(tmp_path: Path):
         [video_file, image_dir],
         batch_size=7,
         num_workers=2,
-        frameid_regex=r"(\d+)",
+        frame_id_regex=r"(\d+)",
         min_frames_per_worker=10,
     )
 

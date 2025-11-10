@@ -110,7 +110,7 @@ ds = VideoCollectionDataset([video1, video2])
 # ... or from directories containing individual frames as images
 video3 = ImageDirVideo("path/to/frames_dir1")
 # (hint: you can use a custom regular expression to control how frame IDs are parsed)
-video4 = ImageDirVideo("path/to/frames_dir2", frameid_regex=r"frame\D*(\d+)(?!\d)")
+video4 = ImageDirVideo("path/to/frames_dir2", frame_id_regex=r"frame\D*(\d+)(?!\d)")
 ds = VideoCollectionDataset([video3, video4])
 
 # You can optionally provide a transform function that will be applied to each frame
@@ -157,7 +157,7 @@ loader = SimpleVideoCollectionLoader(
     num_workers=4,
     transform=my_transform,  # optional
     buffer_size=64,  # optional (for video files)
-    frameid_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
+    frame_id_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
 )
 
 # Iterate over the entire dataset in batches through a single interator

@@ -93,6 +93,6 @@ class DummyDataset(VideoCollectionDataset):
         for i in range(3):
             yield {
                 "frame": torch.ones(3, 4, 5) * i,
-                "video_idx": i,
-                "frame_idx": i,
+                "video_id": i,
+                "frame_id": i,
             }
