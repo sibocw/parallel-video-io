@@ -115,7 +115,7 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
     video4 = ImageDirVideo(frames_dir2, frame_id_regex=r"frame\D*(\d+)(?!\d)")
     ds = VideoCollectionDataset([video3, video4])
 
-    # You can optionally provide a transform functio
+    # You can optionally provide a transform function
     def my_transform(frame):
         return frame * 2.0  # example: double pixel values
 
@@ -130,7 +130,7 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
         ds, batch_size=8, num_workers=0
     )  # Use 0 workers for testing
 
-    # Now you can iterate over the entire dataset in batches through a single interator
+    # Now you can iterate over the entire dataset in batches through a single iterator
     for batch in loader:
         frames = batch["frames"]  # torch.Tensor: B x C x H x W
         video_indices = batch["video_indices"]  # list of int (video indices)
@@ -176,7 +176,7 @@ def test_readme_example_simple_video_collection_loader(tmp_path: Path):
         frame_id_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
     )
 
-    # Iterate over the entire dataset in batches through a single interator
+    # Iterate over the entire dataset in batches through a single iterator
     for batch in loader:
         frames = batch["frames"]  # torch.Tensor: B x C x H x W
         video_indices = batch["video_indices"]  # list of int (video indices)

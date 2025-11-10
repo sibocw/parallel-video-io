@@ -130,7 +130,7 @@ ds = VideoCollectionDataset([video_with_buffer])
 # (you can supply other torch.utils.data.DataLoader keyword arguments if you wish)
 loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=4)
 
-# Now you can iterate over the entire dataset in batches through a single interator
+# Now you can iterate over the entire dataset in batches through a single iterator
 # Behind the scenes, frames are distributed across workers for efficient loading
 for batch in loader:
     frames = batch["frames"]  # torch.Tensor: B x C x H x W
@@ -160,7 +160,7 @@ loader = SimpleVideoCollectionLoader(
     frame_id_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
 )
 
-# Iterate over the entire dataset in batches through a single interator
+# Iterate over the entire dataset in batches through a single iterator
 for batch in loader:
     frames = batch["frames"]  # torch.Tensor: B x C x H x W
     video_indices = batch["video_indices"]  # list of int (video indices)
