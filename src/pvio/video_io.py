@@ -30,8 +30,8 @@ def read_frames_from_video(
     with imageio.get_reader(video_path) as reader:
         if frame_indices is None:
             frame_indices = list(range(reader.count_frames()))
-        for idx in frame_indices:
-            frames.append(reader.get_data(idx))
+        for frame_id in frame_indices:
+            frames.append(reader.get_data(frame_id))
         fps = reader.get_meta_data().get("fps", None)
     return frames, fps
 

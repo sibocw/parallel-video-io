@@ -1,6 +1,10 @@
 """Shared utilities for pvio tests."""
 
 import numpy as np
+import torch
+from typing import Callable
+
+from pvio.torch import VideoCollectionDataset, Video
 
 
 def make_frames_with_stride(n_frames: int, stride: int = 10, h: int = 32, w: int = 32):
@@ -46,3 +50,49 @@ def make_simple_frames(n: int, h: int = 32, w: int = 32, channels: int = 3):
         arr[..., 0] = i  # Vary red channel to identify frames
         frames.append(arr)
     return frames
+
+
+class DummyVideo(Video):
+    """Minimal dummy video for testing without real files."""
+
+    def __init__(self, n_frames: int = 3, frame_range: tuple[int, int] | None = None):
+        # Use a fake path for testing
+        super().__init__(path="/fake/path/test.mp4", frame_range=frame_range)
+        self.n_frames = n_frames
+
+    def _validate_init_params(self) -> None:
+        """Dummy validation - always passes."""
+        pass
+
+    def _load_metadata(self) -> tuple[int, tuple[int, int], float]:
+        """Return dummy metadata."""
+        return self.n_frames, (4, 5), 30.0  # height, width, fps
+
+    def _read_frame(
+        self, index: int, transform: Callable | None = None
+    ) -> torch.Tensor:
+        """Generate a dummy frame with pattern based on index."""
+        frame = torch.ones(3, 4, 5) * index  # CHW format
+        if transform is not None:
+            frame = transform(frame)
+        return frame
+
+
+class DummyDataset(VideoCollectionDataset):
+    """Lightweight dataset for testing without real videos."""
+
+    def __init__(self, videos=None):
+        if videos is None:
+            videos = [DummyVideo()]
+        super().__init__(videos)
+
+    def assign_workers(self, n_loading_workers: int, min_frames_per_worker: int = None):
+        self.worker_assignments = [[] for _ in range(n_loading_workers)]
+
+    def __iter__(self):
+        for i in range(3):
+            yield {
+                "frame": torch.ones(3, 4, 5) * i,
+                "video_id": i,
+                "frame_id": i,
+            }
