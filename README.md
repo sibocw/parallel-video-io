@@ -120,7 +120,7 @@ def my_transform(frame):
     return frame * 2.0  # example: double pixel values
 ds = VideoCollectionDataset([video1, video2], transform=my_transform)
 
-# You can set a buffer_size parameter when creating EncodedVideo objects. 
+# You can set a buffer_size parameter when creating EncodedVideo objects.
 # This is the number of frames to decode at once (default 64).
 # Larger buffer size = faster loading at the cost of memory usage.
 video_with_buffer = EncodedVideo("path/to/video.mp4", buffer_size=128)

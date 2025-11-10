@@ -86,7 +86,7 @@ class Video(ABC):
             )
             return
 
-        # Run-time check of whether arguments to `__init__`
+        # Run-time check of whether arguments to `__init__` are valid
         self._validate_init_params()
 
         # Load video metadata - this might take a non-negligible amount time depending
@@ -416,7 +416,7 @@ class VideoCollectionDataset(IterableDataset):
 
         # Load video metadata before calling `.setup()` on the videos
         # This prevents redundant metadata loading if multiple Video objects are linked
-        # to the same actual video)
+        # to the same actual video
         unique_video_paths = set(
             vid.path for vid in videos if isinstance(vid, EncodedVideo)
         )
@@ -461,9 +461,6 @@ class VideoCollectionDataset(IterableDataset):
         # The i-th worker's assignments are self.worker_assignments[i], which is a list
         # of (video_id, start_vir_frame_id, end_vir_frame_id) tuples.
         self.worker_assignments: list[list[tuple[int, int, int]]] = []
-
-        # Buffers for storing frames during loading, indexed by virtual frame_id
-        self._frames_buffer: dict[tuple[int, int], torch.Tensor] = {}
 
     def assign_workers(
         self, n_loading_workers: int, min_frames_per_worker: int = 300

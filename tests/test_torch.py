@@ -246,8 +246,7 @@ def test_balanced_distribution_large_video(tmp_path: Path):
     ds = VideoCollectionDataset([video])
 
     # Force smaller min_frames_per_worker for testing
-    ds.min_frames_per_worker = 50
-    ds.assign_workers(n_loading_workers=2)
+    ds.assign_workers(n_loading_workers=2, min_frames_per_worker=50)
 
     # Should have 2 workers, each with ~300 frames
     frames_per_worker = [
