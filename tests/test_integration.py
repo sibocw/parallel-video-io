@@ -5,14 +5,14 @@ import numpy as np
 import imageio.v2 as imageio
 from pathlib import Path
 
+from pvio.io import write_frames_to_video
+from pvio.video import EncodedVideo, ImageDirVideo
 from pvio.torch import (
     VideoCollectionDataLoader,
     VideoCollectionDataset,
     SimpleVideoCollectionLoader,
-    EncodedVideo,
-    ImageDirVideo,
 )
-from pvio.video_io import write_frames_to_video
+
 from .test_utils import make_frames_with_stride, DummyVideo, DummyDataset
 
 

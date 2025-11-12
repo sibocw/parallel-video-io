@@ -50,7 +50,7 @@ These examples use NumPy arrays for frames in (height, width, channels) order an
 ### Reading video metadata
 
 ```python
-from pvio.video_io import get_video_metadata, check_num_frames
+from pvio.io import get_video_metadata, check_num_frames
 
 # To get the number of frames in a video
 n_frames = check_num_frames("example.mp4")
@@ -66,7 +66,7 @@ print(meta)  # dict containing the keys "n_frames", "frame_size", and "fps"
 ### Reading video frames
 
 ```python
-from pvio.video_io import read_frames_from_video
+from pvio.io import read_frames_from_video
 
 # You can read a whole video
 frames, fps = read_frames_from_video("example.mp4")
@@ -79,7 +79,7 @@ frames, fps = read_frames_from_video("example.mp4", frame_indices=[0, 5])
 
 ```python
 import numpy as np
-from pvio.video_io import write_frames_to_video
+from pvio.io import write_frames_to_video
 
 # Create dummy 32x32 RGB frames (H, W, C)
 frames = [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(10)]
@@ -98,8 +98,8 @@ results, use dimensions divisible by 16.
 The `VideoCollectionDataset` iterates frames either from video files or from directories containing individual image frames. Then, you can use `VideoCollectionDataLoader` to load frames in parallel. This can be very handy for inference pipelines of neural networks that independently process all frames in a video. [TorchCodec](https://meta-pytorch.org/torchcodec) is used under the hood.
 
 ```python
-from pvio.torch import EncodedVideo  # for "real" videos (e.g. MP4 files)
-from pvio.torch import ImageDirVideo  # for directories containing individual images
+from pvio.video import EncodedVideo  # for "real" videos (e.g. MP4 files)
+from pvio.video import ImageDirVideo  # for directories containing individual images
 from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
 
 # Create Video objects for video files
@@ -176,7 +176,7 @@ pytest tests
 ```
 
 The tests are organized into:
-- `test_video_io.py` - Tests for video I/O functions
+- `test_io.py` - Tests for video I/O functions
 - `test_torch.py` - Unit tests for VideoCollectionDataset
 - `test_integration.py` - Integration tests with parallel loading
 

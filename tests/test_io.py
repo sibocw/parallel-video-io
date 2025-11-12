@@ -1,11 +1,11 @@
-"""Tests for video_io module."""
+"""Tests for io module."""
 
 import pytest
 import numpy as np
 import json
 from pathlib import Path
 
-from pvio.video_io import (
+from pvio.io import (
     write_frames_to_video,
     read_frames_from_video,
     get_video_metadata,
