@@ -15,7 +15,7 @@ from pvio.torch import (
     EncodedVideo,
     ImageDirVideo,
 )
-from pvio.video_io import write_frames_to_video
+from pvio.io import write_frames_to_video
 from .test_utils import make_frames_with_stride, DummyDataset
 
 

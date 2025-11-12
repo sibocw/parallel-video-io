@@ -4,7 +4,8 @@ import numpy as np
 import torch
 from typing import Callable
 
-from pvio.torch import VideoCollectionDataset, Video
+from pvio.video import Video
+from pvio.torch import VideoCollectionDataset
 
 
 def make_frames_with_stride(n_frames: int, stride: int = 10, h: int = 32, w: int = 32):
@@ -31,7 +32,7 @@ def make_frames_with_stride(n_frames: int, stride: int = 10, h: int = 32, w: int
 
 
 def make_simple_frames(n: int, h: int = 32, w: int = 32, channels: int = 3):
-    """Create simple frames for basic video_io tests.
+    """Create simple frames for basic io tests.
 
     Varies the red channel to help identify frames.
 

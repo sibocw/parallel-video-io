@@ -1,11 +1,32 @@
-from .video_io import (
+from . import io
+from . import torch
+from . import video
+
+from .io import (
     read_frames_from_video,
     write_frames_to_video,
     check_num_frames,
     get_video_metadata,
 )
+from .video import Video, EncodedVideo, ImageDirVideo
 from .torch import (
     VideoCollectionDataset,
     VideoCollectionDataLoader,
     SimpleVideoCollectionLoader,
 )
+
+__all__ = [
+    "io",
+    "torch",
+    "video",
+    "read_frames_from_video",
+    "write_frames_to_video",
+    "check_num_frames",
+    "get_video_metadata",
+    "Video",
+    "EncodedVideo",
+    "ImageDirVideo",
+    "VideoCollectionDataset",
+    "VideoCollectionDataLoader",
+    "SimpleVideoCollectionLoader",
+]
