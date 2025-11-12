@@ -135,21 +135,25 @@ class VideoCollectionDataset(IterableDataset):
             f"Assigning {self.n_frames_total} total frames from "
             f"{len(self.videos)} videos to {n_loading_workers} loading workers."
         )
+        n_workers_effective = n_loading_workers
         if n_frames_per_worker < min_frames_per_worker:
             n_frames_per_worker = min_frames_per_worker
-            n_loading_workers = int(np.ceil(self.n_frames_total / n_frames_per_worker))
+            n_workers_effective = int(
+                np.ceil(self.n_frames_total / n_frames_per_worker)
+            )
             logger.info(
                 f"`n_frames_per_worker` is less than `min_frames_per_worker` "
                 f"({min_frames_per_worker}). This will result in many workers working "
                 f"on not so much data, leading to high overhead. "
                 f"Increasing `n_frames_per_worker` to {n_frames_per_worker} and "
-                f"reducing `n_loading_workers` to {n_loading_workers}."
+                f"reducing `n_loading_workers` to {n_workers_effective}."
             )
 
-        # Initialize worker assignments with the final number of workers
+        # Initialize worker assignments (original number of workers! Unused workers get
+        # empty assignments)
         self.worker_assignments = [[] for _ in range(n_loading_workers)]
 
-        for worker_id in range(n_loading_workers):
+        for worker_id in range(n_workers_effective):
             start_global_frame_id = worker_id * n_frames_per_worker
             end_global_frame_id = min(
                 start_global_frame_id + n_frames_per_worker, self.n_frames_total

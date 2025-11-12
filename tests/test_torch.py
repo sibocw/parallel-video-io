@@ -181,7 +181,10 @@ def test_worker_assignment_reduction(tmp_path: Path):
 
     # With default min_frames_per_worker=300 and only 70 frames total,
     # should reduce to 1 worker
-    assert len(ds.worker_assignments) == 1
+    # Each worker should still have a list of assignments
+    assert len(ds.worker_assignments) == 2
+    # ... but the assengment for the second worker should be empty
+    assert len(ds.worker_assignments[1]) == 0
 
     # All frames should still be assigned
     total_assigned = sum(
@@ -269,7 +272,12 @@ def test_small_video_worker_reduction(tmp_path: Path):
     ds.assign_workers(n_loading_workers=4)  # Request more workers than frames
 
     # Should reduce to 1 worker due to minimum frames constraint
-    assert len(ds.worker_assignments) == 1
+    # (assignment list should still exist for all requested workers, but some are empty)
+    assert len(ds.worker_assignments) == 4
+    # only 5 frames - should be assigned to the same worker
+    assert len(ds.worker_assignments[0]) == 1
+    for i in range(1, 4):
+        assert len(ds.worker_assignments[i]) == 0
 
     total_frames = sum(end - start for _, start, end in ds.worker_assignments[0])
     assert total_frames == 5
