@@ -100,7 +100,7 @@ The `VideoCollectionDataset` iterates frames either from video files or from dir
 ```python
 from pvio.video import EncodedVideo  # for "real" videos (e.g. MP4 files)
 from pvio.video import ImageDirVideo  # for directories containing individual images
-from pvio.torch import VideoCollectionDataset, VideoCollectionDataLoader
+from pvio.torch_tools import VideoCollectionDataset, VideoCollectionDataLoader
 
 # Create Video objects for video files
 video1 = EncodedVideo("path/to/video1.mp4")
@@ -143,7 +143,7 @@ for batch in loader:
 If you don't mind breaking the standard `Dataset` + `DataLoader` pattern with `torch.utils.data`, you can use `SimpleVideoCollectionLoader`, which combines dataset and dataloader creation. This dataloader can also automatically create the appropriate Video objects from paths:
 
 ```python
-from pvio.torch import SimpleVideoCollectionLoader
+from pvio.torch_tools import SimpleVideoCollectionLoader
 
 # Video specification can be mixed: path to real videos, path to directories of images,
 # and pre-created Video objects are all allowed.
@@ -177,8 +177,9 @@ pytest tests
 
 The tests are organized into:
 - `test_io.py` - Tests for video I/O functions
-- `test_torch.py` - Unit tests for VideoCollectionDataset
+- `test_torch_tools.py` - Unit tests for VideoCollectionDataset
 - `test_integration.py` - Integration tests with parallel loading
+- `test_readme_examples.py` - Tests to make sure the examples in this README work
 
 There are a few tests that write small MP4 files using imageio/ffmpeg; ensure `ffmpeg` is available in the environment where tests run.
 
@@ -187,4 +188,4 @@ There are a few tests that write small MP4 files using imageio/ffmpeg; ensure `f
 
 - FFmpeg macroblock constraints: some ffmpeg builds require frame dimensions to be divisible by 16. If you see a warning about `macro_block_size=16` and unexpected resizing, choose frame sizes divisible by 16 in production pipelines.
 - If you plan to decode many large videos, enabling metadata caching will speed up repeated indexing (the package writes a `.metadata.json` for each video under the same directory when `get_video_metadata` is called).
-- If you have a non-standard data format, you can implement your own backend by creating a subclass of `pvio.torch.Video`.
+- If you have a non-standard data format, you can implement your own backend by creating a subclass of `pvio.torch_tools.Video`.

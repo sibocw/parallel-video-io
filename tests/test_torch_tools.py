@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 from multiprocessing import cpu_count
 
-from pvio.torch import (
+from pvio.torch_tools import (
     VideoCollectionDataLoader,
     VideoCollectionDataset,
     SimpleVideoCollectionLoader,

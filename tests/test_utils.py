@@ -5,7 +5,7 @@ import torch
 from typing import Callable
 
 from pvio.video import Video
-from pvio.torch import VideoCollectionDataset
+from pvio.torch_tools import VideoCollectionDataset
 
 
 def make_frames_with_stride(n_frames: int, stride: int = 10, h: int = 32, w: int = 32):

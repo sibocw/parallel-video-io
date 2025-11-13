@@ -1,5 +1,5 @@
 from . import io
-from . import torch
+from . import torch_tools
 from . import video
 
 from .io import (
@@ -9,7 +9,7 @@ from .io import (
     get_video_metadata,
 )
 from .video import Video, EncodedVideo, ImageDirVideo
-from .torch import (
+from .torch_tools import (
     VideoCollectionDataset,
     VideoCollectionDataLoader,
     SimpleVideoCollectionLoader,
@@ -17,7 +17,7 @@ from .torch import (
 
 __all__ = [
     "io",
-    "torch",
+    "torch_tools",
     "video",
     "read_frames_from_video",
     "write_frames_to_video",

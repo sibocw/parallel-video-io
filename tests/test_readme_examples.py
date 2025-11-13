@@ -12,7 +12,7 @@ from pvio.io import (
     write_frames_to_video,
 )
 from pvio.video import EncodedVideo, ImageDirVideo
-from pvio.torch import (
+from pvio.torch_tools import (
     VideoCollectionDataset,
     VideoCollectionDataLoader,
     SimpleVideoCollectionLoader,
