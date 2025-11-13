@@ -289,9 +289,12 @@ class ImageDirVideo(Video):
         if frame_id_regex is not None and isinstance(frame_id_regex, str):
             frame_id_regex = re.compile(frame_id_regex)
         self.frame_id_regex: re.Pattern | None = frame_id_regex
-        self.phy_frame_id_to_path: dict[int, Path] = (
-            {}
-        )  # to be populated in _post_setup
+
+        # The following mappings are to be populated in `._post_setup()`
+        self.phy_frame_id_to_path: dict[int, Path] = {}
+        self.vir_frame_id_to_path: dict[int, Path] = {}
+        self.frame_id_vir2phy: dict[int, int] = {}
+        self.frame_id_phy2vir: dict[int, int] = {}
 
     @staticmethod
     def _parse_frame_id_from_filename(
@@ -324,27 +327,29 @@ class ImageDirVideo(Video):
         has to be implemented in _post_setup because frame range is not resolved until
         this point."""
         # Index frame paths by frame_ids
+        all_paths = [path for path in self.path.iterdir() if path.is_file()]
         if self.frame_id_regex is None:
-            all_paths = [path for path in self.path.iterdir() if path.is_file()]
             all_paths.sort(key=lambda f: f.name)
-            for i, path in enumerate(all_paths):
-                self.phy_frame_id_to_path[i] = path
-        elif isinstance(self.frame_id_regex, re.Pattern):
-            self.phy_frame_id_to_path = {
-                self._parse_frame_id_from_filename(path.name, self.frame_id_regex): path
-                for path in self.path.iterdir()
-                if path.is_file()
-            }
+            for i, img_path in enumerate(all_paths):
+                self.phy_frame_id_to_path[i] = img_path
+                self.vir_frame_id_to_path[i] = img_path
+                self.frame_id_vir2phy[i] = i
+                self.frame_id_phy2vir[i] = i
+        else:
+            phy_frame_id_and_path = [
+                (self._parse_frame_id_from_filename(p.name, self.frame_id_regex), p)
+                for p in all_paths
+            ]
+            phy_frame_id_and_path.sort(key=lambda x: x[0])
+            for vir_frame_id, (phy_frame_id, img_path) in enumerate(
+                phy_frame_id_and_path
+            ):
+                self.phy_frame_id_to_path[phy_frame_id] = img_path
+                self.vir_frame_id_to_path[vir_frame_id] = img_path
+                self.frame_id_vir2phy[vir_frame_id] = phy_frame_id
+                self.frame_id_phy2vir[phy_frame_id] = vir_frame_id
 
-        # Verify that all frame indices in the effective frame range are present
-        for phy_frame_id in range(*self.frame_range_effective):
-            if phy_frame_id not in self.phy_frame_id_to_path:
-                raise FileNotFoundError(
-                    f"Frame range {self.frame_range_effective} covers frame index "
-                    f"{phy_frame_id}, but this frame is not found in image directory "
-                    f"{self.path}."
-                )
-        return True
+        return True  # mark success
 
     def _load_metadata(self) -> tuple[int, tuple[int, int], float]:
         all_files = [f for f in self.path.iterdir() if f.is_file()]
@@ -361,11 +366,10 @@ class ImageDirVideo(Video):
 
     def _read_frame(self, index: int, transform: Callable | None) -> torch.Tensor:
         vir_frame_id = index  # `index` is the virtual frame_id - make alias for clarity
-        phy_frame_id = vir_frame_id + self.frame_range_effective[0]
         assert (
-            phy_frame_id in self.phy_frame_id_to_path
+            vir_frame_id in self.vir_frame_id_to_path
         ), f"Frame index {index} not found"
-        frame_path = self.phy_frame_id_to_path[phy_frame_id]
+        frame_path = self.vir_frame_id_to_path[vir_frame_id]
         frame = imageio.imread(frame_path)
         frame = torch.from_numpy(frame)
         if frame.ndim == 2:
