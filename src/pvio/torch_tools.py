@@ -26,7 +26,7 @@ class VideoCollectionDataset(IterableDataset):
         use_cached_video_metadata: bool = True,
         n_frame_counting_workers: int = -1,
         progress_bar: bool | None = None,
-    ):
+    ) -> None:
         r"""Yields individual frames from several videos.
 
         Args:
@@ -215,12 +215,14 @@ class VideoCollectionDataLoader(DataLoader):
     Note: Custom batch_sampler and collate_fn are not supported.
     """
 
+    dataset: VideoCollectionDataset
+
     def __init__(
         self,
         dataset: VideoCollectionDataset,
         min_frames_per_worker: int = 300,
         **kwargs,
-    ):
+    ) -> None:
         """Create a torch.utils.data.DataLoader compatible for VideoCollectionDataset.
 
         Args:
@@ -278,7 +280,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         progress_bar: bool | None = None,
         min_frames_per_worker: int = 300,
         **kwargs,
-    ):
+    ) -> None:
         """Easier API for parallel video loading if you don't mind deviating from the
         standard "Dataset + DataLoader" pattern with torch.utils.data. Use this class
         like the DataLoader.
