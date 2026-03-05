@@ -8,6 +8,9 @@ from time import time
 from typing import Callable
 from torchcodec.decoders import VideoDecoder
 from pathlib import Path
+from tempfile import mkstemp
+from os import getpid
+import fcntl
 
 from .io import get_video_metadata
 
@@ -202,6 +205,14 @@ class EncodedVideo(Video):
         self._decoder: VideoDecoder | None = None
         self._buffer: dict[int, torch.Tensor] = {}
 
+        # Make temp lock file to avoid race condition in video decoder creation
+        _, temp_path = mkstemp()
+        self._lock_path = Path(temp_path)
+
+    def __del__(self):
+        # Multiple processes might try to delete it - only one of them needs to do it
+        self._lock_path.unlink(missing_ok=True)
+
     def _validate_init_params(self) -> None:
         if not self.path.is_file():
             raise FileNotFoundError(
@@ -228,9 +239,7 @@ class EncodedVideo(Video):
     def _read_frame(self, index: int, transform: Callable | None) -> torch.Tensor:
         # If this is the first time reading from this video, initialize the decoder
         if self._decoder is None:
-            self._decoder = VideoDecoder(
-                self.path.as_posix(), seek_mode="exact", dimension_order="NCHW"
-            )
+            self._decoder = self._create_video_decoder(self.path, self._lock_path)
 
         vir_frame_id = index  # `index` is the virtual frame_id - make alias for clarity
 
@@ -257,6 +266,25 @@ class EncodedVideo(Video):
             self._buffer[_vfid] = frame
 
         return self._buffer[vir_frame_id]
+
+    @staticmethod
+    def _create_video_decoder(video_path: Path, lock_path: Path) -> VideoDecoder:
+        """Create a TorchCodec VideoLoader object in a process-safe way. This function
+        uses a file lock to prevent race conditions where multiple processes try to
+        create VideoDecoder instances for the same file simultaneously. Without this,
+        the loading workers sometimes (but not always) segfault. It's unclear to me how
+        this happens, but I think it probably has to do with some global state that
+        ffmpeg internally builds upon first access, which is mutex-managed among ffmpeg
+        workers internally but not safe across multiple calling processes. This is not a
+        problem for actual frame reads because the global state becomes read-only after
+        init. See https://ffmpeg.org/pipermail/libav-user/2014-August/007298.html"""
+        with open(lock_path, "w") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            decoder = VideoDecoder(
+                video_path.as_posix(), seek_mode="exact", dimension_order="NCHW"
+            )
+            # Lock is automatically released when the file is closed
+        return decoder
 
     def close(self):
         # VideoDecoder from torchcodec doesn't have a "close" method - just let Python
