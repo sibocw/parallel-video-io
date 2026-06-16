@@ -384,6 +384,10 @@ class ImageDirVideo(Video):
         if n_frames_total == 0:
             raise ValueError(f"No image files found in directory {self.path}.")
 
+        # Note: frame_size is sampled from an arbitrary file because iterdir() returns
+        # files in OS-defined order. For well-formed datasets all frames share the same
+        # size, so this is fine in practice; if sizes differ the reported frame_size may
+        # not reflect the majority or the first frame by sort order.
         sample_frame = imageio.imread(all_files[0])
         frame_size = sample_frame.shape[:2]
 
