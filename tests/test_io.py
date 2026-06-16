@@ -52,8 +52,8 @@ def test_get_video_metadata_uses_cache(tmp_path: Path):
     out = tmp_path / "cache.mp4"
     write_frames_to_video(out, frames, fps=5.0)
 
-    # Write fake metadata
-    meta_file = out.with_suffix(".metadata.json")
+    # Write fake metadata at the correct cache path (name + suffix, not replacing suffix)
+    meta_file = out.parent / (out.name + ".metadata.json")
     fake_meta = {"n_frames": 123, "frame_size": [32, 32], "fps": 12.0}
     with open(meta_file, "w") as f:
         json.dump(fake_meta, f)
@@ -71,13 +71,37 @@ def test_get_video_metadata_corrupted_cache_raises(tmp_path: Path):
     out = tmp_path / "corrupt.mp4"
     write_frames_to_video(out, frames, fps=5.0)
 
-    # Write invalid JSON
-    meta_file = out.with_suffix(".metadata.json")
+    # Write invalid JSON at the correct cache path
+    meta_file = out.parent / (out.name + ".metadata.json")
     with open(meta_file, "w") as f:
         f.write("not a json")
 
     with pytest.raises(Exception):
         get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+
+
+def test_metadata_cache_path_appends_not_replaces(tmp_path: Path):
+    """Bug 4: cache path must append the suffix, not replace the video extension.
+
+    Two videos with the same stem but different extensions must not share a cache file.
+    """
+    frames = make_simple_frames(n=2, h=32, w=32)
+    mp4 = tmp_path / "clip.mp4"
+    avi = tmp_path / "clip.avi"
+    write_frames_to_video(mp4, frames, fps=5.0)
+    write_frames_to_video(avi, frames, fps=5.0)
+
+    # Cache metadata for both
+    get_video_metadata(mp4, cache_metadata=True, use_cached_metadata=False)
+    get_video_metadata(avi, cache_metadata=True, use_cached_metadata=False)
+
+    # Each video must produce a distinct cache file
+    mp4_cache = tmp_path / "clip.mp4.metadata.json"
+    avi_cache = tmp_path / "clip.avi.metadata.json"
+    assert mp4_cache.exists(), f"Expected cache file {mp4_cache}"
+    assert avi_cache.exists(), f"Expected cache file {avi_cache}"
+    # The old buggy path (replacing .mp4) must NOT exist
+    assert not (tmp_path / "clip.metadata.json").exists()
 
 
 def test_check_num_frames_on_invalid_file_raises(tmp_path: Path):

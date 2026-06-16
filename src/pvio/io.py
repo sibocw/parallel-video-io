@@ -129,7 +129,7 @@ def get_video_metadata(
             "fps" (float | None): Frames per second, or None if unavailable.
     """
     video_path = Path(video_path)
-    cache_path = video_path.with_suffix(metadata_suffix)
+    cache_path = video_path.parent / (video_path.name + metadata_suffix)
     metadata = {}
     if use_cached_metadata and cache_path.is_file():
         try:
