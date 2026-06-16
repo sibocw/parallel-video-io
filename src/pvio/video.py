@@ -11,9 +11,7 @@ from torchcodec.decoders import VideoDecoder
 from pathlib import Path
 from tempfile import mkstemp
 from os import getpid
-
-if sys.platform != "win32":
-    import fcntl
+import fcntl
 
 from .io import get_video_metadata
 
@@ -275,8 +273,7 @@ class EncodedVideo(Video):
         threads. After init the state is read-only, so parallel frame reads are fine.
         See https://ffmpeg.org/pipermail/libav-user/2014-August/007298.html"""
         with open(lock_path, "w") as lock_file:
-            if sys.platform != "win32":
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             decoder = VideoDecoder(
                 video_path.as_posix(), seek_mode="exact", dimension_order="NCHW"
             )

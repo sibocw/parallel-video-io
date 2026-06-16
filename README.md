@@ -2,6 +2,8 @@
 
 Tools for reading and writing videos and for efficient frame-level loading with PyTorch.
 
+**Linux only.** This package requires Linux; macOS and Windows are not supported.
+
 This repository provides small, focused utilities around video I/O and a PyTorch-compatible iterable dataset + dataloader for streaming frames from many videos or image-frame directories in parallel.
 
 ## Key features
@@ -22,6 +24,8 @@ This repository provides small, focused utilities around video I/O and a PyTorch
 - [Notes & troubleshooting](#notes--troubleshooting)
 
 ## Installation
+
+> **Linux only.** This package will raise a `RuntimeError` at import time on macOS or Windows.
 
 Install from PyPI:
 ```bash

@@ -119,3 +119,112 @@ def test_write_frames_to_video_empty_raises(tmp_path: Path):
 
     with pytest.raises(ValueError):
         write_frames_to_video(out, [], fps=10.0)
+
+
+# ---------------------------------------------------------------------------
+# Comprehensive tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_frames_all_frames(tmp_path: Path):
+    """read_frames_from_video with no indices returns all frames."""
+    frames = make_simple_frames(n=8, h=16, w=16)
+    out = tmp_path / "all.mp4"
+    write_frames_to_video(out, frames, fps=10.0)
+    read_back, fps = read_frames_from_video(out)
+    assert len(read_back) == 8
+    assert fps is not None
+
+
+def test_read_frames_specific_indices(tmp_path: Path):
+    """read_frames_from_video with explicit indices returns only those frames."""
+    frames = make_simple_frames(n=10, h=16, w=16)
+    out = tmp_path / "sel.mp4"
+    write_frames_to_video(out, frames, fps=10.0)
+    selected, _ = read_frames_from_video(out, frame_indices=[0, 3, 7])
+    assert len(selected) == 3
+
+
+def test_write_frames_creates_file(tmp_path: Path):
+    """write_frames_to_video creates a file at the given path."""
+    out = tmp_path / "created.mp4"
+    write_frames_to_video(out, make_simple_frames(n=3, h=16, w=16), fps=5.0)
+    assert out.is_file()
+    assert out.stat().st_size > 0
+
+
+def test_write_frames_custom_codec(tmp_path: Path):
+    """write_frames_to_video accepts custom codec and ffmpeg_params."""
+    out = tmp_path / "custom.mp4"
+    write_frames_to_video(
+        out,
+        make_simple_frames(n=3, h=16, w=16),
+        fps=5.0,
+        codec="libx264",
+        ffmpeg_params=["-crf", "23", "-preset", "ultrafast"],
+    )
+    assert out.is_file()
+
+
+def test_get_video_metadata_cache_bypass(tmp_path: Path):
+    """use_cached_metadata=False re-reads from disk even if a cache file exists."""
+    frames = make_simple_frames(n=3, h=16, w=16)
+    out = tmp_path / "bypass.mp4"
+    write_frames_to_video(out, frames, fps=5.0)
+
+    # Plant a fake cache with wrong n_frames
+    cache = out.parent / (out.name + ".metadata.json")
+    with open(cache, "w") as f:
+        json.dump({"n_frames": 999, "frame_size": [16, 16], "fps": 5.0}, f)
+
+    meta = get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)
+    assert meta["n_frames"] != 999
+
+
+def test_get_video_metadata_no_cache_written(tmp_path: Path):
+    """cache_metadata=False must not write a cache file."""
+    frames = make_simple_frames(n=2, h=16, w=16)
+    out = tmp_path / "nocache.mp4"
+    write_frames_to_video(out, frames, fps=5.0)
+
+    get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)
+
+    cache = out.parent / (out.name + ".metadata.json")
+    assert not cache.exists()
+
+
+def test_get_video_metadata_returns_correct_types(tmp_path: Path):
+    """get_video_metadata returns dict with correctly-typed values."""
+    frames = make_simple_frames(n=4, h=32, w=48)
+    out = tmp_path / "types.mp4"
+    write_frames_to_video(out, frames, fps=24.0)
+    meta = get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)
+    assert isinstance(meta["n_frames"], int)
+    assert isinstance(meta["frame_size"], tuple)
+    assert len(meta["frame_size"]) == 2
+    assert meta["fps"] is None or isinstance(meta["fps"], (int, float))
+
+
+def test_check_num_frames_matches_metadata(tmp_path: Path):
+    """check_num_frames and get_video_metadata agree on frame count."""
+    n = 7
+    frames = make_simple_frames(n=n, h=16, w=16)
+    out = tmp_path / "count.mp4"
+    write_frames_to_video(out, frames, fps=5.0)
+    assert check_num_frames(out) == get_video_metadata(
+        out, cache_metadata=False, use_cached_metadata=False
+    )["n_frames"]
+
+
+def test_get_video_metadata_cache_written(tmp_path: Path):
+    """cache_metadata=True writes a parseable JSON cache file."""
+    frames = make_simple_frames(n=2, h=16, w=16)
+    out = tmp_path / "write_cache.mp4"
+    write_frames_to_video(out, frames, fps=5.0)
+    get_video_metadata(out, cache_metadata=True, use_cached_metadata=False)
+
+    cache = out.parent / (out.name + ".metadata.json")
+    assert cache.exists()
+    with open(cache) as f:
+        data = json.load(f)
+    assert "n_frames" in data and "frame_size" in data and "fps" in data
