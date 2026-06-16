@@ -184,6 +184,13 @@ class VideoCollectionDataset(IterableDataset):
             )
 
     def __iter__(self):
+        if not self.worker_assignments:
+            raise RuntimeError(
+                "VideoCollectionDataset requires VideoCollectionDataLoader. "
+                "Did you forget to wrap the dataset in VideoCollectionDataLoader, "
+                "or call .assign_workers() before iterating?"
+            )
+
         # Get worker info for distributed loading
         worker_info = get_worker_info()
         if worker_info is None:

@@ -289,6 +289,23 @@ def test_small_video_worker_reduction(tmp_path: Path):
     assert total_frames == 5
 
 
+def test_dataset_iter_without_assign_workers_raises(tmp_path: Path):
+    """Bug 8: iterating VideoCollectionDataset without calling assign_workers (or using
+    VideoCollectionDataLoader) must raise a clear, user-facing error."""
+    from pvio.video import ImageDirVideo
+
+    d = tmp_path / "frames"
+    d.mkdir()
+    import imageio.v2 as _iio
+    _iio.imwrite(d / "frame_000.png", np.zeros((8, 8, 3), dtype=np.uint8))
+
+    video = ImageDirVideo(d)
+    ds = VideoCollectionDataset([video])
+
+    with pytest.raises(RuntimeError, match="VideoCollectionDataLoader"):
+        next(iter(ds))
+
+
 def test_encoded_video_buffer_stores_pretransform(tmp_path: Path):
     """Bug 2: EncodedVideo buffer must cache raw frames, not post-transform frames.
 
