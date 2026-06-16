@@ -230,13 +230,19 @@ def test_simple_video_collection_loader(tmp_path: Path):
 
 def test_worker_resolution():
     """Test worker count resolution logic."""
+    from pvio.torch_tools import _resolve_n_workers_spec
+
     # Test automatic worker resolution
     loader = SimpleVideoCollectionLoader([], num_workers=-1, min_frames_per_worker=1)
     assert 0 < loader.num_workers <= cpu_count()
 
-    # Test zero workers becomes 1
+    # Test zero workers stays 0 (main-process DataLoader, no pickling)
     loader2 = SimpleVideoCollectionLoader([], num_workers=0, min_frames_per_worker=1)
-    assert loader2.num_workers == 1
+    assert loader2.num_workers == 0
+
+    # Bug 3: values above cpu_count() must be accepted (valid DataLoader use case)
+    above_cpu = cpu_count() + 4
+    assert _resolve_n_workers_spec(above_cpu) == above_cpu
 
 
 def test_balanced_distribution_large_video(tmp_path: Path):
@@ -281,3 +287,356 @@ def test_small_video_worker_reduction(tmp_path: Path):
 
     total_frames = sum(end - start for _, start, end in ds.worker_assignments[0])
     assert total_frames == 5
+
+
+def test_dataset_iter_without_assign_workers_raises(tmp_path: Path):
+    """Bug 8: iterating VideoCollectionDataset without calling assign_workers (or using
+    VideoCollectionDataLoader) must raise a clear, user-facing error."""
+    from pvio.video import ImageDirVideo
+
+    d = tmp_path / "frames"
+    d.mkdir()
+    import imageio.v2 as _iio
+
+    _iio.imwrite(d / "frame_000.png", np.zeros((8, 8, 3), dtype=np.uint8))
+
+    video = ImageDirVideo(d)
+    ds = VideoCollectionDataset([video])
+
+    with pytest.raises(RuntimeError, match="VideoCollectionDataLoader"):
+        next(iter(ds))
+
+
+def test_encoded_video_buffer_stores_pretransform(tmp_path: Path):
+    """Bug 2: EncodedVideo buffer must cache raw frames, not post-transform frames.
+
+    If the buffer stores the transformed frame, a second read of the same frame
+    with a different transform returns the wrong result.
+    """
+    video_path = create_test_video(tmp_path / "vid.mp4", n_frames=5)
+    video = EncodedVideo(video_path, buffer_size=10)
+    video.setup()
+
+    double = lambda x: x * 2.0  # noqa: E731
+    half = lambda x: x * 0.5  # noqa: E731
+
+    # First read populates the buffer
+    frame_doubled = video.read_frame(1, transform=double)
+    # Second read on the same frame is a cache hit
+    frame_halved = video.read_frame(1, transform=half)
+
+    # With bug: frame_halved == frame_doubled (transform baked into cache)
+    # With fix: they differ because transforms are applied to the raw cached frame
+    assert not torch.allclose(frame_doubled, frame_halved), (
+        "Buffer is storing post-transform frames; second read ignores its transform"
+    )
+
+
+def test_image_dir_video_frame_range_offset(tmp_path: Path):
+    """Bug 1: ImageDirVideo.read_frame(n) must return frame at physical position
+    frame_range[0]+n, not position n."""
+    d = tmp_path / "frames"
+    d.mkdir()
+    # 10 frames, each filled with a unique color value (0, 10, 20, ..., 90)
+    for i in range(10):
+        color = i * 10
+        img = np.full((8, 8, 3), fill_value=color, dtype=np.uint8)
+        imageio.imwrite(d / f"frame_{i:03d}.png", img)
+
+    video = ImageDirVideo(d, frame_range=(3, 7))
+    video.setup()
+
+    assert len(video) == 4
+
+    # Virtual index 0 → physical frame 3 → color=30
+    frame0 = video.read_frame(0)
+    assert abs(frame0.mean().item() - 30 / 255.0) < 0.01
+
+    # Virtual index 3 → physical frame 6 → color=60
+    frame3 = video.read_frame(3)
+    assert abs(frame3.mean().item() - 60 / 255.0) < 0.01
+
+
+# ---------------------------------------------------------------------------
+# Comprehensive tests
+# ---------------------------------------------------------------------------
+
+
+class TestImageDirVideoComprehensive:
+    """Comprehensive tests for ImageDirVideo."""
+
+    def test_full_range_no_regex(self, tmp_path: Path):
+        """No frame_range reads all frames in filename-sorted order."""
+        d = tmp_path / "f"
+        create_test_images(d, 5, use_regex_pattern=False)
+        video = ImageDirVideo(d, frame_id_regex=None)
+        video.setup()
+        assert len(video) == 5
+
+    def test_full_range_with_regex(self, tmp_path: Path):
+        """No frame_range reads all frames when regex is used."""
+        d = tmp_path / "f"
+        create_test_images(d, 5)
+        video = ImageDirVideo(d)
+        video.setup()
+        assert len(video) == 5
+
+    def test_frame_range_length(self, tmp_path: Path):
+        """frame_range=(a, b) exposes exactly b-a frames."""
+        d = tmp_path / "f"
+        create_test_images(d, 10)
+        video = ImageDirVideo(d, frame_range=(2, 8))
+        video.setup()
+        assert len(video) == 6
+
+    def test_frame_range_offset_no_regex(self, tmp_path: Path):
+        """frame_range offset works correctly without regex (alphabetical sort)."""
+        d = tmp_path / "f"
+        d.mkdir()
+        for i in range(5):
+            img = np.full((8, 8, 3), fill_value=i * 50, dtype=np.uint8)
+            imageio.imwrite(d / f"{chr(ord('a') + i)}.png", img)
+
+        video = ImageDirVideo(d, frame_id_regex=None, frame_range=(1, 4))
+        video.setup()
+        # virtual 0 → 'b.png' → value 50
+        frame = video.read_frame(0)
+        assert abs(frame.mean().item() - 50 / 255.0) < 0.01
+
+    def test_read_frame_returns_chw_float(self, tmp_path: Path):
+        """read_frame returns a float tensor in CHW format in [0, 1]."""
+        d = tmp_path / "f"
+        create_test_images(d, 3)
+        video = ImageDirVideo(d)
+        video.setup()
+        frame = video.read_frame(0)
+        assert frame.dtype == torch.float32
+        assert frame.ndim == 3  # CHW
+        assert frame.min() >= 0.0
+        assert frame.max() <= 1.0
+
+    def test_read_frame_with_transform(self, tmp_path: Path):
+        """Transform is applied to the loaded frame."""
+        d = tmp_path / "f"
+        d.mkdir()
+        img = np.full((8, 8, 3), fill_value=100, dtype=np.uint8)
+        imageio.imwrite(d / "frame_000.png", img)
+
+        video = ImageDirVideo(d)
+        video.setup()
+        raw = video.read_frame(0)
+        doubled = video.read_frame(0, transform=lambda x: x * 2.0)
+        assert torch.allclose(doubled, raw * 2.0)
+
+    def test_index_out_of_bounds_raises(self, tmp_path: Path):
+        """Accessing a virtual index beyond the range raises IndexError."""
+        d = tmp_path / "f"
+        create_test_images(d, 3)
+        video = ImageDirVideo(d, frame_range=(0, 2))
+        video.setup()
+        with pytest.raises(IndexError):
+            video.read_frame(2)
+
+    def test_setup_required_before_len(self, tmp_path: Path):
+        """__len__ raises RuntimeError before setup() is called."""
+        d = tmp_path / "f"
+        create_test_images(d, 2)
+        video = ImageDirVideo(d)
+        with pytest.raises(RuntimeError):
+            len(video)
+
+    def test_grayscale_image_gets_channel_dim(self, tmp_path: Path):
+        """Grayscale images are returned as (1, H, W) tensors."""
+        d = tmp_path / "gray"
+        d.mkdir()
+        img = np.zeros((8, 8), dtype=np.uint8)  # 2D grayscale
+        imageio.imwrite(d / "frame_000.png", img)
+
+        video = ImageDirVideo(d)
+        video.setup()
+        frame = video.read_frame(0)
+        assert frame.shape[0] == 1  # channel dim added
+
+    def test_invalid_directory_raises(self):
+        """Providing a nonexistent directory raises FileNotFoundError on setup."""
+        video = ImageDirVideo("/nonexistent/path/to/dir")
+        with pytest.raises(FileNotFoundError):
+            video.setup()
+
+    def test_frame_range_out_of_bounds_raises(self, tmp_path: Path):
+        """frame_range that exceeds the available frames raises ValueError."""
+        d = tmp_path / "f"
+        create_test_images(d, 3)
+        video = ImageDirVideo(d, frame_range=(0, 10))
+        with pytest.raises(ValueError):
+            video.setup()
+
+
+class TestResolveNWorkersSpec:
+    """Tests for _resolve_n_workers_spec edge cases."""
+
+    def setup_method(self):
+        from pvio.torch_tools import _resolve_n_workers_spec
+
+        self.resolve = _resolve_n_workers_spec
+
+    def test_positive_below_cpu_count(self):
+        assert self.resolve(1) == 1
+
+    def test_positive_above_cpu_count(self):
+        """Values above cpu_count() are valid (Bug 3)."""
+        n = cpu_count() + 8
+        assert self.resolve(n) == n
+
+    def test_zero_becomes_one(self):
+        assert self.resolve(0) == 1
+
+    def test_negative_one_uses_all_cores(self):
+        assert self.resolve(-1) == cpu_count()
+
+    def test_negative_two_uses_all_minus_one(self):
+        if cpu_count() >= 2:
+            assert self.resolve(-2) == cpu_count() - 1
+
+    def test_too_negative_raises(self):
+        with pytest.raises(ValueError):
+            self.resolve(-(cpu_count() + 1))
+
+
+class TestVideoCollectionDatasetWorkerAssignment:
+    """Tests for worker assignment correctness."""
+
+    def test_all_frames_covered(self, tmp_path: Path):
+        """Every frame is assigned to exactly one worker."""
+        paths = [tmp_path / f"v{i}.mp4" for i in range(3)]
+        counts = [10, 15, 20]
+        for path, n in zip(paths, counts):
+            create_test_video(path, n)
+
+        videos = [EncodedVideo(p) for p in paths]
+        ds = VideoCollectionDataset(videos)
+        ds.assign_workers(n_loading_workers=3)
+
+        assigned = sum(e - s for worker in ds.worker_assignments for _, s, e in worker)
+        assert assigned == sum(counts)
+
+    def test_empty_workers_get_empty_assignment(self, tmp_path: Path):
+        """Workers that receive no frames get an empty assignment list."""
+        path = tmp_path / "tiny.mp4"
+        create_test_video(path, 5)
+        ds = VideoCollectionDataset([EncodedVideo(path)])
+        ds.assign_workers(n_loading_workers=4)
+
+        assert len(ds.worker_assignments) == 4
+        assert any(len(a) == 0 for a in ds.worker_assignments)
+
+    def test_assignment_indices_are_contiguous_within_video(self, tmp_path: Path):
+        """Each worker's assignment for a given video is a contiguous range."""
+        path = tmp_path / "big.mp4"
+        create_test_video(path, 100)
+        ds = VideoCollectionDataset([EncodedVideo(path)])
+        ds.assign_workers(n_loading_workers=3, min_frames_per_worker=1)
+
+        for worker_chunks in ds.worker_assignments:
+            for _, start, end in worker_chunks:
+                assert start < end
+
+
+class TestVideoCollectionDataLoaderComprehensive:
+    """End-to-end tests for VideoCollectionDataLoader."""
+
+    def test_iteration_yields_all_frames(self, tmp_path: Path):
+        """DataLoader iterates over every frame exactly once."""
+        path = tmp_path / "v.mp4"
+        create_test_video(path, 20)
+        video = EncodedVideo(path)
+        ds = VideoCollectionDataset([video])
+        loader = VideoCollectionDataLoader(ds, batch_size=4, num_workers=0)
+
+        total = sum(b["frames"].shape[0] for b in loader)
+        assert total == 20
+
+    def test_batch_tensor_shape(self, tmp_path: Path):
+        """Each batch contains a (B, C, H, W) float32 tensor."""
+        path = tmp_path / "v.mp4"
+        create_test_video(path, 10)
+        ds = VideoCollectionDataset([EncodedVideo(path)])
+        loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=0)
+
+        batch = next(iter(loader))
+        frames = batch["frames"]
+        assert frames.ndim == 4
+        assert frames.dtype == torch.float32
+        assert frames.min() >= 0.0
+        assert frames.max() <= 1.0
+
+    def test_video_and_frame_indices_in_batch(self, tmp_path: Path):
+        """Batches contain matching video_indices and frame_indices."""
+        path = tmp_path / "v.mp4"
+        create_test_video(path, 6)
+        ds = VideoCollectionDataset([EncodedVideo(path)])
+        loader = VideoCollectionDataLoader(ds, batch_size=6, num_workers=0)
+
+        batch = next(iter(loader))
+        assert batch["video_indices"] == [0] * 6
+        assert sorted(batch["frame_indices"]) == list(range(6))
+
+    def test_multiple_videos_all_yielded(self, tmp_path: Path):
+        """Frames from all videos appear in the iteration."""
+        paths = [tmp_path / f"v{i}.mp4" for i in range(3)]
+        for i, p in enumerate(paths):
+            create_test_video(p, 10)
+
+        videos = [EncodedVideo(p) for p in paths]
+        ds = VideoCollectionDataset(videos)
+        loader = VideoCollectionDataLoader(ds, batch_size=5, num_workers=0)
+
+        total = sum(b["frames"].shape[0] for b in loader)
+        assert total == 30
+
+    def test_transform_applied_to_all_frames(self, tmp_path: Path):
+        """Transform supplied to dataset is applied to every yielded frame."""
+        d = tmp_path / "imgs"
+        create_test_images(d, 4)
+        ds = VideoCollectionDataset([ImageDirVideo(d)], transform=lambda x: x * 0.0)
+        loader = VideoCollectionDataLoader(ds, batch_size=4, num_workers=0)
+        batch = next(iter(loader))
+        assert batch["frames"].max() == 0.0
+
+
+class TestSimpleVideoCollectionLoaderComprehensive:
+    """Tests for SimpleVideoCollectionLoader."""
+
+    def test_accepts_path_strings(self, tmp_path: Path):
+        """Path strings are accepted alongside Path objects and Video instances."""
+        path = tmp_path / "v.mp4"
+        create_test_video(path, 5)
+        loader = SimpleVideoCollectionLoader(
+            [str(path)], batch_size=5, num_workers=0, min_frames_per_worker=1
+        )
+        total = sum(b["frames"].shape[0] for b in loader)
+        assert total == 5
+
+    def test_accepts_image_dir_path(self, tmp_path: Path):
+        """Directory paths are automatically wrapped in ImageDirVideo."""
+        d = tmp_path / "imgs"
+        create_test_images(d, 6)
+        loader = SimpleVideoCollectionLoader(
+            [d],
+            batch_size=6,
+            num_workers=0,
+            min_frames_per_worker=1,
+            frame_id_regex=r"(\d+)",
+        )
+        total = sum(b["frames"].shape[0] for b in loader)
+        assert total == 6
+
+    def test_nonexistent_path_raises(self):
+        """A path that does not exist raises FileNotFoundError."""
+        with pytest.raises(FileNotFoundError):
+            SimpleVideoCollectionLoader(["/nonexistent/path.mp4"])
+
+    def test_invalid_type_raises(self):
+        """Passing an invalid type as a video spec raises TypeError."""
+        with pytest.raises(TypeError):
+            SimpleVideoCollectionLoader([42])

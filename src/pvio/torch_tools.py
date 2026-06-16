@@ -4,7 +4,7 @@ import re
 import numpy as np
 from sys import stderr
 from multiprocessing import cpu_count
-from typing import Callable
+from typing import Any, Callable
 from torch.utils.data import IterableDataset, DataLoader, get_worker_info
 from pathlib import Path
 from joblib import Parallel, delayed
@@ -27,23 +27,25 @@ class VideoCollectionDataset(IterableDataset):
         n_frame_counting_workers: int = -1,
         progress_bar: bool | None = None,
     ) -> None:
-        r"""Yields individual frames from several videos.
+        r"""Iterable dataset that yields frames from a list of Video objects.
+
+        Each frame is yielded as a CHW float32 tensor with values in [0, 1].
+        Call `.assign_workers()` (done automatically by VideoCollectionDataLoader)
+        before iterating.
 
         Args:
-            videos (list[Video]): List of Video objects (EncodedVideo, ImageDirVideo, etc.)
-            transform (Callable | None): A function that is to be applied to each frame
-                after loading. Note that the following operations are already applied to
-                each frame:
-                    (i) conversion from numpy array to torch tensor,
-                    (ii) conversion from HWC to CHW format, and
-                    (iii) conversion from uint8 in [0, 255] to float in [0, 1].
-                The transform function, if provided, is applied after these operations.
-            use_cached_video_metadata (bool): Whether to use cached metadata if
-                available. Set to False to force re-reading metadata.
-            n_frame_counting_workers (int): Number of workers to use for counting frames
-                in video files. If -1, uses all available cores.
-            progress_bar (bool | None): Whether to show progress bar during metadata loading.
-                If None, shows progress bar only when stderr is a TTY.
+            videos (list[Video]): Video objects to iterate. Videos are set up here;
+                do not call `.setup()` on them beforehand.
+            transform (Callable | None): Applied to each tensor before yielding.
+                The following are already applied before the transform: (i)
+                numpy array → torch tensor, (ii) HWC → CHW layout, and
+                (iii) uint8 ``[0, 255]`` → float32 ``[0, 1]``.
+            use_cached_video_metadata (bool): Use cached metadata for EncodedVideo
+                objects if available. Set to False to force re-reading.
+            n_frame_counting_workers (int): Parallel workers for pre-loading
+                EncodedVideo metadata. -1 uses all available cores.
+            progress_bar (bool | None): Show a progress bar during metadata loading.
+                If None, shows one only when stderr is a TTY.
         """
         self.videos = videos
         self.transform = transform
@@ -100,21 +102,16 @@ class VideoCollectionDataset(IterableDataset):
     def assign_workers(
         self, n_loading_workers: int, min_frames_per_worker: int = 300
     ) -> None:
-        """Assign frames to workers for balanced parallel loading.
+        """Distribute frames across workers for balanced parallel loading.
 
-        This method distributes all frames across the specified number of workers such
-        that each worker processes approximately the same number of frames. The
-        assignment ensures contiguous frame ranges within each video to minimize seeking
-        overhead during decoding.
+        Frames are assigned in contiguous ranges within each video to minimise
+        seeking overhead. If the per-worker frame count would fall below
+        `min_frames_per_worker`, the effective worker count is reduced accordingly.
 
         Args:
-            n_loading_workers (int): Number of workers to assign frames to. Each worker
-                will be assigned approximately the same total number of frames across
-                all videos.
-            min_frames_per_worker (int): Minimum number of frames each worker should
-                process. If the calculated frames per worker is below this threshold,
-                the number of workers is reduced to meet this minimum. This helps avoid
-                excessive overhead from too many workers on small datasets.
+            n_loading_workers (int): Number of workers to distribute frames across.
+            min_frames_per_worker (int): Lower bound on frames per worker. Workers
+                below this threshold are merged to avoid excessive overhead.
         """
         # Make an array of (video_id, vir_frame_id) pairs. frame_id is virtual (i.e.
         # index 0 corresponds to physical frame_id=frame_range[0])
@@ -170,10 +167,13 @@ class VideoCollectionDataset(IterableDataset):
             unique_video_ids = np.unique(my_specs[:, 0])
             for video_id in unique_video_ids:
                 vir_frame_ids_local = my_specs[my_specs[:, 0] == video_id, 1]
-                start_vir_frame_id = vir_frame_ids_local[0]
-                end_vir_frame_id = vir_frame_ids_local[-1] + 1  # exclusive
+                # Cast to Python int: these flow into the yielded batch dicts, and the
+                # public API documents video_indices/frame_indices as lists of int (not
+                # numpy.int32, which would surprise strict isinstance checks / JSON).
+                start_vir_frame_id = int(vir_frame_ids_local[0])
+                end_vir_frame_id = int(vir_frame_ids_local[-1]) + 1  # exclusive
                 self.worker_assignments[worker_id].append(
-                    (video_id, start_vir_frame_id, end_vir_frame_id)
+                    (int(video_id), start_vir_frame_id, end_vir_frame_id)
                 )
         _nframes_total_check = 0
         for worker_chunks in self.worker_assignments:
@@ -186,6 +186,13 @@ class VideoCollectionDataset(IterableDataset):
             )
 
     def __iter__(self):
+        if not self.worker_assignments:
+            raise RuntimeError(
+                "VideoCollectionDataset requires VideoCollectionDataLoader. "
+                "Did you forget to wrap the dataset in VideoCollectionDataLoader, "
+                "or call .assign_workers() before iterating?"
+            )
+
         # Get worker info for distributed loading
         worker_info = get_worker_info()
         if worker_info is None:
@@ -213,16 +220,14 @@ class VideoCollectionDataset(IterableDataset):
 class VideoCollectionDataLoader(DataLoader):
     """DataLoader for VideoCollectionDataset with automatic worker assignment.
 
-    This DataLoader automatically assigns video frames to workers for efficient parallel
-    loading. Each worker processes approximately the same number of frames, and frame
-    assignments maintain contiguous ranges within videos to minimize seeking overhead.
+    Each worker is assigned a contiguous range of frames to minimise seeking
+    overhead. Batch dicts contain:
 
-    The output batches contain:
-    - frames: Tensor of shape (batch_size, channels, height, width)
-    - video_indices: List of video indices (int) for each frame
-    - frame_indices: List of frame indices (int) within each video
+    - ``frames``: Tensor of shape (batch_size, C, H, W)
+    - ``video_indices``: list of int — index into the videos list
+    - ``frame_indices``: list of int — virtual frame index within that video
 
-    Note: Custom batch_sampler and collate_fn are not supported.
+    Custom ``batch_sampler`` and ``collate_fn`` are not supported.
     """
 
     dataset: VideoCollectionDataset
@@ -231,17 +236,15 @@ class VideoCollectionDataLoader(DataLoader):
         self,
         dataset: VideoCollectionDataset,
         min_frames_per_worker: int = 300,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
-        """Create a torch.utils.data.DataLoader compatible for VideoCollectionDataset.
+        """Wrap a VideoCollectionDataset in a DataLoader with automatic worker assignment.
 
         Args:
             dataset (VideoCollectionDataset): The dataset to load from.
-            min_frames_per_worker (int): Minimum number of frames each worker should
-                process. If the calculated frames per worker is below this threshold,
-                the number of workers is reduced to meet this minimum. This helps avoid
-                excessive overhead from too many workers on small datasets.
-            **kwargs: Additional keyword arguments passed to the base DataLoader.
+            min_frames_per_worker (int): Minimum frames per worker; the effective
+                worker count is reduced if this threshold would otherwise be breached.
+            **kwargs: Forwarded to torch.utils.data.DataLoader.
         """
         if not isinstance(dataset, VideoCollectionDataset):
             raise ValueError(
@@ -289,22 +292,33 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         n_frame_counting_workers: int = -1,
         progress_bar: bool | None = None,
         min_frames_per_worker: int = 300,
-        **kwargs,
+        **kwargs: Any,
     ) -> None:
-        """Easier API for parallel video loading if you don't mind deviating from the
-        standard "Dataset + DataLoader" pattern with torch.utils.data. Use this class
-        like the DataLoader.
+        """Create a VideoCollectionDataset and VideoCollectionDataLoader in one call.
 
-        The `videos` argument is a list of video specifications, each of which can be
-        either an already-constructed Video object, or a path to video data. If it is a
-        path, the Video object will be created automatically (specify arguments for the
-        Video constructors here as keyword arguments).
+        Each entry in *videos* may be a pre-constructed :class:`Video` object
+        or a path (str / Path). Paths pointing to files become
+        :class:`EncodedVideo`; paths pointing to directories become
+        :class:`ImageDirVideo`.
 
-        Other arguments are passed to VideoCollectionDataset and DataLoader (see their
-        documentation).
-
-        Once constructed, you can use an object of this class like a regular
-        torch.utils.data.DataLoader, e.g. in a for loop over batches."""
+        Args:
+            videos: Video sources.
+            transform: Applied to each CHW float32 frame tensor before it is
+                yielded.
+            buffer_size: Decode-buffer size forwarded to :class:`EncodedVideo`
+                for file-path entries.
+            frame_id_regex: Regex forwarded to :class:`ImageDirVideo` for
+                directory-path entries.
+            use_cached_video_metadata: Use cached metadata when available. Set
+                to ``False`` to force fresh reads.
+            n_frame_counting_workers: Workers for parallel metadata loading.
+                ``-1`` uses all available cores.
+            progress_bar: Show a progress bar during metadata loading.
+                Defaults to ``True`` when stderr is a TTY.
+            min_frames_per_worker: Minimum frames per worker; see
+                :meth:`VideoCollectionDataset.assign_workers`.
+            **kwargs: Forwarded to :class:`~torch.utils.data.DataLoader`.
+        """
         logger.info(
             "Checking requested videos and creating Video objects from paths if needed"
         )
@@ -325,7 +339,10 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         )
 
         num_workers = kwargs.get("num_workers", 0)  # 0 is normal DataLoader default
-        kwargs["num_workers"] = _resolve_n_workers_spec(num_workers)
+        if num_workers != 0:
+            kwargs["num_workers"] = _resolve_n_workers_spec(num_workers)
+        # num_workers=0 is passed through as-is; VideoCollectionDataLoader handles it by
+        # running in the main process while still calling assign_workers(1)
 
         logger.info("Creating VideoCollectionDataLoader")
         super().__init__(dataset, min_frames_per_worker=min_frames_per_worker, **kwargs)
@@ -370,9 +387,20 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
 
 
 def _resolve_n_workers_spec(n_workers: int) -> int:
-    """Resolve number of workers from user specification. If -1, use all available
-    cores, if -2, use all but one core, etc. If 0, set to 1 (we don't separately
-    implement doing the work in the main thread/process; a single child will be used).
+    """Resolve a worker-count spec to a concrete positive integer.
+
+    Negative values follow the joblib convention: ``-1`` means all cores,
+    ``-2`` means all but one, and so on. ``0`` is mapped to ``1`` because
+    main-process iteration is not implemented.
+
+    Args:
+        n_workers: Worker-count spec.
+
+    Returns:
+        Resolved worker count (always ≥ 1).
+
+    Raises:
+        ValueError: If *n_workers* is less than ``-n_cpu_cores``.
     """
     n_cpu_cores = cpu_count()
     n_workers_resolved = None
@@ -387,18 +415,18 @@ def _resolve_n_workers_spec(n_workers: int) -> int:
         )
     elif n_workers == 0:
         logger.info(
-            f"n_workers_spec=0 interpreted as 1 worker. Processing in main thread not "
-            f"implemented; will use a single worker process/thread instead."
+            "n_workers_spec=0 interpreted as 1 worker. Processing in main thread not "
+            "implemented; will use a single worker process/thread instead."
         )
         return 1
-    elif 0 < n_workers <= n_cpu_cores:
+    elif n_workers > 0:
         return n_workers
     else:
-        pass  # cannot resolve
+        pass  # cannot resolve (n_workers < -n_cpu_cores)
 
     if n_workers_resolved is None:
         raise ValueError(
-            f"Invalid n_workers_spec={n_workers}. Must be between "
-            f"{-n_cpu_cores} and {n_cpu_cores} (inclusive, n_cpu_cores={n_cpu_cores})."
+            f"Invalid n_workers_spec={n_workers}. Must be >= {-n_cpu_cores} "
+            f"(n_cpu_cores={n_cpu_cores})."
         )
     return n_workers_resolved

@@ -16,17 +16,13 @@ def read_frames_from_video(
     """Read specific frames from a video file.
 
     Args:
-        video_path (Path | str): Path to the video file.
-        frame_indices (list[int] | None): List of frame indices to read. If None, read
-            all frames.
-
-    Raises:
-        ValueError: If the video file cannot be read.
-        IndexError: If the frame indices are invalid.
+        video_path: Path to the video file.
+        frame_indices: Frame indices to read. If ``None``, reads all frames.
 
     Returns:
-        frames (list[np.ndarray]): List of frames as numpy arrays.
-        fps (float): FPS of the video.
+        A 2-tuple ``(frames, fps)``. *frames* is a list of uint8 numpy arrays
+        in ``(H, W, C)`` format. *fps* is the FPS reported by the container,
+        or ``None`` if unavailable.
     """
     frames = []
     with imageio.get_reader(video_path) as reader:
@@ -49,20 +45,28 @@ def write_frames_to_video(
     """Write a sequence of frames to a video file.
 
     Args:
-        video_path (Path | str): Path to save the video file.
-        frames (list[np.ndarray]): List of frames as numpy arrays (in
-            [height, width, channels] format).
-        fps (float): Frames per second for the output video.
-        codec (str): Codec to use. Default: 'libx264'.
-        ffmpeg_params (list[str]): Additional ffmpeg parameters. Default is a set of
-            parameters for high-quality H.264 encoding.
-        log_interval (int | None): If set, log progress every `log_interval` frames at
-            INFO level.
+        video_path: Path for the output video file.
+        frames: Frames as uint8 numpy arrays in ``(H, W, C)`` format. All
+            frames must share the same spatial dimensions.
+        fps: Frames per second of the output video.
+        codec: FFmpeg codec name. Default: ``"libx264"``.
+        ffmpeg_params: Raw FFmpeg parameter list. If ``None``, uses
+            high-quality H.264 defaults (CRF 20, slow preset, high profile).
+            CRF 20 is more conservative than FFmpeg's default of 23, which is
+            appropriate for scientific data where quality loss should be
+            minimal. Lower values (e.g. 18) produce higher quality at the
+            cost of larger file sizes.
+        log_interval: If set, log progress every *log_interval* frames at
+            ``INFO`` level.
+
+    Raises:
+        ValueError: If *frames* is empty or contains frames with mismatched
+            dimensions.
     """
     if ffmpeg_params is None:
         ffmpeg_params = [
             "-crf",
-            "15",  # Lower CRF = higher quality (15 is very high quality)
+            "20",  # Lower = higher quality; 20 is conservative vs FFmpeg's default 23
             "-preset",
             "slow",  # Slower preset = better compression efficiency
             "-profile:v",
@@ -94,12 +98,22 @@ def write_frames_to_video(
         for i, frame in enumerate(frames):
             video_writer.append_data(frame)
 
-            if log_interval is not None and i % log_interval == 0:
+            if log_interval is not None and (i + 1) % log_interval == 0:
                 logger.info(f"Written frame {i + 1}/{len(frames)}")
 
 
 def check_num_frames(video_path: Path | str) -> int:
-    """Check number of frames in a video file."""
+    """Return the number of frames in a video file.
+
+    Args:
+        video_path: Path to the video file.
+
+    Returns:
+        Total frame count.
+
+    Raises:
+        RuntimeError: If the file cannot be opened.
+    """
     try:
         with imageio.get_reader(video_path) as reader:
             num_frames = reader.count_frames()
@@ -114,22 +128,26 @@ def get_video_metadata(
     use_cached_metadata: bool = True,
     metadata_suffix: str = ".metadata.json",
 ) -> dict[str, int | tuple[int, int] | float | None]:
-    """Get number of frames, frame size, and FPS of a video file.
+    """Return frame count, frame size, and FPS for a video file.
+
+    Results are cached to a sidecar JSON file alongside the video to avoid
+    re-reading on subsequent calls.
 
     Args:
-        video_path (Path | str): Path to the video file.
-        cache_metadata (bool): Whether to cache the metadata to a JSON file. Default is
-            True.
-        use_cached_metadata (bool): Whether to use cached metadata if available. Default
-            is True.
-        metadata_suffix (str): Suffix to use for the metadata cache file. Default is
-            ".metadata.json".
+        video_path: Path to the video file.
+        cache_metadata: Write metadata to a cache file after reading.
+        use_cached_metadata: Return cached metadata if the sidecar file
+            exists. Set to ``False`` to force a fresh read.
+        metadata_suffix: Suffix appended to the video filename to form the
+            cache path. Default: ``".metadata.json"``.
 
     Returns:
-        dict: A dictionary containing the video metadata.
+        Dictionary with keys ``"n_frames"`` (int total frame count),
+        ``"frame_size"`` (tuple ``(height, width)``), and ``"fps"``
+        (float or ``None`` if unavailable).
     """
     video_path = Path(video_path)
-    cache_path = video_path.with_suffix(metadata_suffix)
+    cache_path = video_path.parent / (video_path.name + metadata_suffix)
     metadata = {}
     if use_cached_metadata and cache_path.is_file():
         try:

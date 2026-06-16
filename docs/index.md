@@ -13,31 +13,18 @@ After finding myself writing the same thing over and over again for different pr
 3. PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that stream frames from many videos in parallel across worker processes.
     - `SimpleVideoCollectionLoader` provides a convenience API that combines dataset and dataloader creation in one call.
 
-**Linux only.** macOS and Windows are not currently supported.
-
-## Installation, code examples, and documentation
-
-See [the documentation site](https://sibocw.github.io/parallel-video-io/).
 
 
-## Development
+## Notes & troubleshooting
 
-Clone and install with the dev dependencies:
+**FFmpeg macroblock constraints.** Some FFmpeg builds require frame dimensions to be
+divisible by 16. If you see a warning about `macro_block_size=16` and unexpected
+resizing, use dimensions divisible by 16 in production pipelines.
 
-```bash
-git clone git@github.com:sibocw/parallel-video-io.git
-cd parallel-video-io
-uv sync --extra dev
-```
+**Metadata caching.** `get_video_metadata` writes a `.metadata.json` file next to each
+video to speed up repeated indexing of large collections. Set `use_cached_metadata=False`
+to force a fresh read.
 
-Run the test suite:
-
-```bash
-pytest tests
-```
-
-Build and preview the documentation site locally:
-
-```bash
-uv run mkdocs serve
-```
+**Custom backends.** Subclass `pvio.video.Video` and implement `_validate_init_params`,
+`_load_metadata`, and `_read_frame` to add a custom video backend. See the
+[Video Backends](api/video.md) API reference for the full subclassing contract.

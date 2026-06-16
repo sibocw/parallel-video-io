@@ -1,3 +1,10 @@
+import sys
+
+if sys.platform != "linux":
+    raise RuntimeError(
+        f"parallel-video-io only supports Linux. Current platform: {sys.platform!r}."
+    )
+
 from . import io
 from . import torch_tools
 from . import video
