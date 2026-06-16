@@ -415,8 +415,8 @@ def _resolve_n_workers_spec(n_workers: int) -> int:
         )
     elif n_workers == 0:
         logger.info(
-            f"n_workers_spec=0 interpreted as 1 worker. Processing in main thread not "
-            f"implemented; will use a single worker process/thread instead."
+            "n_workers_spec=0 interpreted as 1 worker. Processing in main thread not "
+            "implemented; will use a single worker process/thread instead."
         )
         return 1
     elif n_workers > 0:

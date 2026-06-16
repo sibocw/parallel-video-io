@@ -211,9 +211,12 @@ def test_check_num_frames_matches_metadata(tmp_path: Path):
     frames = make_simple_frames(n=n, h=16, w=16)
     out = tmp_path / "count.mp4"
     write_frames_to_video(out, frames, fps=5.0)
-    assert check_num_frames(out) == get_video_metadata(
-        out, cache_metadata=False, use_cached_metadata=False
-    )["n_frames"]
+    assert (
+        check_num_frames(out)
+        == get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)[
+            "n_frames"
+        ]
+    )
 
 
 def test_get_video_metadata_cache_written(tmp_path: Path):

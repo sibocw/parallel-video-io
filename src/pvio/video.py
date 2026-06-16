@@ -133,9 +133,7 @@ class Video(ABC):
 
         self.__setup_done = True
 
-    def read_frame(
-        self, index: int, transform: Callable | None = None
-    ) -> torch.Tensor:
+    def read_frame(self, index: int, transform: Callable | None = None) -> torch.Tensor:
         """Read a single frame as a CHW float32 tensor.
 
         Args:

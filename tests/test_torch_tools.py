@@ -297,6 +297,7 @@ def test_dataset_iter_without_assign_workers_raises(tmp_path: Path):
     d = tmp_path / "frames"
     d.mkdir()
     import imageio.v2 as _iio
+
     _iio.imwrite(d / "frame_000.png", np.zeros((8, 8, 3), dtype=np.uint8))
 
     video = ImageDirVideo(d)
@@ -476,6 +477,7 @@ class TestResolveNWorkersSpec:
 
     def setup_method(self):
         from pvio.torch_tools import _resolve_n_workers_spec
+
         self.resolve = _resolve_n_workers_spec
 
     def test_positive_below_cpu_count(self):
@@ -515,9 +517,7 @@ class TestVideoCollectionDatasetWorkerAssignment:
         ds = VideoCollectionDataset(videos)
         ds.assign_workers(n_loading_workers=3)
 
-        assigned = sum(
-            e - s for worker in ds.worker_assignments for _, s, e in worker
-        )
+        assigned = sum(e - s for worker in ds.worker_assignments for _, s, e in worker)
         assert assigned == sum(counts)
 
     def test_empty_workers_get_empty_assignment(self, tmp_path: Path):
@@ -598,9 +598,7 @@ class TestVideoCollectionDataLoaderComprehensive:
         """Transform supplied to dataset is applied to every yielded frame."""
         d = tmp_path / "imgs"
         create_test_images(d, 4)
-        ds = VideoCollectionDataset(
-            [ImageDirVideo(d)], transform=lambda x: x * 0.0
-        )
+        ds = VideoCollectionDataset([ImageDirVideo(d)], transform=lambda x: x * 0.0)
         loader = VideoCollectionDataLoader(ds, batch_size=4, num_workers=0)
         batch = next(iter(loader))
         assert batch["frames"].max() == 0.0
@@ -624,8 +622,11 @@ class TestSimpleVideoCollectionLoaderComprehensive:
         d = tmp_path / "imgs"
         create_test_images(d, 6)
         loader = SimpleVideoCollectionLoader(
-            [d], batch_size=6, num_workers=0, min_frames_per_worker=1,
-            frame_id_regex=r"(\d+)"
+            [d],
+            batch_size=6,
+            num_workers=0,
+            min_frames_per_worker=1,
+            frame_id_regex=r"(\d+)",
         )
         total = sum(b["frames"].shape[0] for b in loader)
         assert total == 6
