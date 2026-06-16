@@ -51,7 +51,11 @@ def write_frames_to_video(
         fps: Frames per second of the output video.
         codec: FFmpeg codec name. Default: ``"libx264"``.
         ffmpeg_params: Raw FFmpeg parameter list. If ``None``, uses
-            high-quality H.264 defaults (CRF 15, slow preset, high profile).
+            high-quality H.264 defaults (CRF 20, slow preset, high profile).
+            CRF 20 is more conservative than FFmpeg's default of 23, which is
+            appropriate for scientific data where quality loss should be
+            minimal. Lower values (e.g. 18) produce higher quality at the
+            cost of larger file sizes.
         log_interval: If set, log progress every *log_interval* frames at
             ``INFO`` level.
 
@@ -62,7 +66,7 @@ def write_frames_to_video(
     if ffmpeg_params is None:
         ffmpeg_params = [
             "-crf",
-            "15",  # Lower CRF = higher quality (15 is very high quality)
+            "20",  # Lower = higher quality; 20 is conservative vs FFmpeg's default 23
             "-preset",
             "slow",  # Slower preset = better compression efficiency
             "-profile:v",

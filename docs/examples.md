@@ -39,6 +39,13 @@ from pvio.io import write_frames_to_video
 frames = [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(10)]
 
 write_frames_to_video("example.mp4", frames, fps=25.0)
+
+# Override encoding quality — lower CRF = higher quality, larger file.
+# Default is CRF 20 (conservative vs FFmpeg's 23); use 18 for lossless-like output.
+write_frames_to_video(
+    "example_hq.mp4", frames, fps=25.0,
+    ffmpeg_params=["-crf", "18", "-preset", "slow", "-profile:v", "high", "-level", "4.0"],
+)
 ```
 
 !!! note "FFmpeg macroblock alignment"
