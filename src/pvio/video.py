@@ -435,6 +435,10 @@ class ImageDirVideo(Video):
             frame_id_regex = re.compile(frame_id_regex)
         self.frame_id_regex: re.Pattern | None = frame_id_regex
 
+        # Directory listing cached by `._load_metadata()` and reused by
+        # `._post_setup()` so the directory is scanned only once.
+        self._image_files: list[Path] = []
+
         # The following mappings are to be populated in `._post_setup()`
         self.phy_frame_id_to_path: dict[int, Path] = {}
         self.vir_frame_id_to_path: dict[int, Path] = {}
@@ -477,7 +481,7 @@ class ImageDirVideo(Video):
         regex and no-regex branches use this positional convention, so a frame_range
         always selects a contiguous slice of the ordered sequence. See the class
         docstring for the rationale."""
-        all_paths = [path for path in self.path.iterdir() if path.is_file()]
+        all_paths = self._image_files  # cached by _load_metadata; scanned once
         start, end = self.frame_range_effective
 
         if self.frame_id_regex is None:
@@ -506,8 +510,9 @@ class ImageDirVideo(Video):
                     self.frame_id_phy2vir[phy_frame_id] = vir_frame_id
 
     def _load_metadata(self) -> tuple[int, tuple[int, int], float]:
-        all_files = [f for f in self.path.iterdir() if f.is_file()]
-        n_frames_total = len(all_files)  # n total images in dir (not just in range)
+        # Scan the directory once and cache it for `._post_setup()`.
+        self._image_files = [f for f in self.path.iterdir() if f.is_file()]
+        n_frames_total = len(self._image_files)  # total images (not just in range)
         if n_frames_total == 0:
             raise ValueError(f"No image files found in directory {self.path}.")
 
@@ -515,7 +520,7 @@ class ImageDirVideo(Video):
         # files in OS-defined order. For well-formed datasets all frames share the same
         # size, so this is fine in practice; if sizes differ the reported frame_size may
         # not reflect the majority or the first frame by sort order.
-        sample_frame = imageio.imread(all_files[0])
+        sample_frame = imageio.imread(self._image_files[0])
         frame_size = sample_frame.shape[:2]
 
         fps = None  # not applicable for image directories
