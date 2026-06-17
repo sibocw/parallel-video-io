@@ -112,6 +112,47 @@ def plot_write(df, out: list[Path]):
     out.append(_save(fig, "write_speed_size_quality.png"))
 
 
+def plot_write_pareto(df, out: list[Path]):
+    """Throughput vs compression-ratio Pareto curves, one line per encoder.
+
+    Each method is swept across quality settings (libx264 CRF / NVENC QP), so it
+    traces a frontier rather than sitting at a single point. Up and to the right
+    is better (faster *and* smaller). Each marker is annotated with its PSNR so
+    the curves can be read at matched quality, not just matched compression.
+    """
+    sub = _ok(df[df["task"] == "write_pareto"]).copy()
+    if sub.empty:
+        return
+    workloads = sorted(sub["workload"].unique())
+    fig, axes = plt.subplots(1, len(workloads), figsize=(7 * len(workloads), 5.5))
+    if len(workloads) == 1:
+        axes = [axes]
+    for ax, workload in zip(axes, workloads):
+        wl = sub[sub["workload"] == workload]
+        for backend, g in wl.groupby("backend"):
+            g = g.sort_values("x_compression_ratio")
+            ax.plot(
+                g["x_compression_ratio"],
+                g["metric_main"],
+                marker="o",
+                label=backend,
+            )
+            for _, row in g.iterrows():
+                ax.annotate(
+                    f"{row['x_psnr_db']:.1f} dB",
+                    (row["x_compression_ratio"], row["metric_main"]),
+                    textcoords="offset points",
+                    xytext=(5, 5),
+                    fontsize=7,
+                )
+        ax.set_xlabel("compression ratio (raw / encoded) →")
+        ax.set_ylabel("encode throughput (frames / s) →")
+        ax.set_title(f"Speed vs compression Pareto — {workload}")
+        ax.grid(alpha=0.3)
+        ax.legend(title="encoder")
+    out.append(_save(fig, "write_pareto.png"))
+
+
 def plot_loc(df, out: list[Path]):
     sub = df[df["task"] == "loc"]
     if sub.empty:
@@ -137,6 +178,7 @@ def generate(df: pd.DataFrame | None = None) -> list[Path]:
     plot_read_random(df, out)
     plot_loading(df, out)
     plot_write(df, out)
+    plot_write_pareto(df, out)
     plot_loc(df, out)
     return out
 

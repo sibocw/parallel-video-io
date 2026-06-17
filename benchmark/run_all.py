@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import os
 
-ALL_TASKS = ("read", "loading", "write", "loc")
+ALL_TASKS = ("read", "loading", "write", "write_pareto", "loc")
 
 
 def _apply_quick_defaults() -> None:
@@ -92,6 +92,21 @@ def _write_summary(df, path) -> None:
             "Write (speed / size / compression / quality)",
             _render_md_table(s[cols].round(3)),
         )
+    if (s := ok[ok["task"] == "write_pareto"]).shape[0]:
+        cols = [
+            "workload",
+            "backend",
+            "x_quality_param",
+            "metric_main",
+            "x_compression_ratio",
+            "x_psnr_db",
+            "x_ssim",
+        ]
+        s = s.sort_values(["workload", "backend", "x_quality_param"])
+        section(
+            "Write Pareto sweep (throughput vs compression, per quality level)",
+            _render_md_table(s[cols].round(3)),
+        )
     if (s := df[df["task"] == "loc"]).shape[0]:
         p = s.pivot_table(index="workload", columns="backend", values="metric_main")
         section(
@@ -141,6 +156,11 @@ def main() -> None:
 
         print("== write ==")
         results += bench_write.run()
+    if "write_pareto" in args.only:
+        from . import bench_write_pareto
+
+        print("== write_pareto ==")
+        results += bench_write_pareto.run()
     if "loc" in args.only:
         from . import loc
 
