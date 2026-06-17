@@ -1,10 +1,14 @@
-"""Run the full benchmark suite and write results, a markdown summary, and figures.
+"""Run the consolidated benchmark suite and write results, a summary, and figures.
+
+Three tasks (encoding, random access, sequential access) are measured across the
+video libraries on four metrics (lines of code, throughput, compression ratio,
+and the encode speed-vs-compression Pareto front).
 
 Usage::
 
-    uv run python -m benchmark.run_all                 # everything
-    uv run python -m benchmark.run_all --only loc read # subset of tasks
-    uv run python -m benchmark.run_all --quick         # small, fast smoke run
+    uv run python -m benchmark.run_all                  # everything
+    uv run python -m benchmark.run_all --only encode    # subset of tasks
+    uv run python -m benchmark.run_all --quick          # small, fast smoke run
     uv run python -m benchmark.run_all --no-figures
 
 Results land in ``benchmark/results/`` (``results.csv``, ``environment.json``,
@@ -16,19 +20,17 @@ from __future__ import annotations
 import argparse
 import os
 
-ALL_TASKS = ("read", "loading", "write", "write_pareto", "loc")
+ALL_TASKS = ("encode", "random", "sequential", "loc")
 
 
 def _apply_quick_defaults() -> None:
     """Shrink the workload for a fast smoke run (only sets unset env vars)."""
     defaults = {
         "PVIO_BENCH_NFRAMES": "120",
-        "PVIO_BENCH_N_COLLECTION_VIDEOS": "6",
-        "PVIO_BENCH_COLLECTION_NFRAMES": "120",
-        "PVIO_BENCH_COLLECTION_RES": "sd",
-        "PVIO_BENCH_WORKER_SWEEP": "1,4",
+        "PVIO_BENCH_ENCODE_NFRAMES": "120",
         "PVIO_BENCH_N_REPEATS": "1",
         "PVIO_BENCH_N_RANDOM_READS": "50",
+        "PVIO_BENCH_QUALITY_SWEEP": "16,20,28,34",
     }
     for k, v in defaults.items():
         os.environ.setdefault(k, v)
@@ -52,47 +54,22 @@ def _write_summary(df, path) -> None:
     def section(title, body):
         lines.extend([f"## {title}", "", body, ""])
 
-    if (s := ok[ok["task"] == "read_sequential"]).shape[0]:
-        p = s.pivot_table(
-            index="workload", columns="backend", values="metric_main"
-        ).round(0)
-        section(
-            "Sequential decode (frames/s, higher better)",
-            _render_md_table(p.reset_index()),
-        )
-    if (s := ok[ok["task"] == "read_random"]).shape[0]:
-        p = s.pivot_table(
-            index="workload", columns="backend", values="metric_main"
-        ).round(2)
-        section(
-            "Random-access seek (ms/frame, lower better)",
-            _render_md_table(p.reset_index()),
-        )
-        corr = s.groupby("backend")["x_seek_correct"].all()
-        section("Seek correctness (all videos)", _render_md_table(corr.reset_index()))
-    if (s := ok[ok["task"] == "loading"]).shape[0]:
-        p = s.pivot_table(
-            index="x_num_workers", columns="backend", values="metric_main"
-        ).round(0)
-        section(
-            "Parallel loading (frames/s vs workers, higher better)",
-            _render_md_table(p.reset_index()),
-        )
-    if (s := ok[ok["task"] == "write"]).shape[0]:
+    if (s := ok[ok["task"] == "encode"]).shape[0]:
         cols = [
             "workload",
             "backend",
             "metric_main",
-            "x_file_size_mb",
             "x_compression_ratio",
+            "x_file_size_mb",
             "x_psnr_db",
             "x_ssim",
         ]
+        s = s.sort_values(["workload", "backend"])
         section(
-            "Write (speed / size / compression / quality)",
+            "Encoding (frames/s, compression ratio = JPEG-folder/video, quality)",
             _render_md_table(s[cols].round(3)),
         )
-    if (s := ok[ok["task"] == "write_pareto"]).shape[0]:
+    if (s := ok[ok["task"] == "encode_pareto"]).shape[0]:
         cols = [
             "workload",
             "backend",
@@ -100,12 +77,28 @@ def _write_summary(df, path) -> None:
             "metric_main",
             "x_compression_ratio",
             "x_psnr_db",
-            "x_ssim",
         ]
         s = s.sort_values(["workload", "backend", "x_quality_param"])
         section(
-            "Write Pareto sweep (throughput vs compression, per quality level)",
+            "Encoding Pareto sweep (throughput vs compression per quality level)",
             _render_md_table(s[cols].round(3)),
+        )
+    if (s := ok[ok["task"] == "random"]).shape[0]:
+        p = s.pivot_table(
+            index="workload", columns="backend", values="metric_main"
+        ).round(0)
+        section(
+            "Random access (frames/s, higher better)", _render_md_table(p.reset_index())
+        )
+        corr = s.groupby("backend")["x_seek_correct"].all()
+        section("Seek correctness (all videos)", _render_md_table(corr.reset_index()))
+    if (s := ok[ok["task"] == "sequential"]).shape[0]:
+        p = s.pivot_table(
+            index="workload", columns="backend", values="metric_main"
+        ).round(0)
+        section(
+            "Sequential access (frames/s, higher better)",
+            _render_md_table(p.reset_index()),
         )
     if (s := df[df["task"] == "loc"]).shape[0]:
         p = s.pivot_table(index="workload", columns="backend", values="metric_main")
@@ -141,26 +134,21 @@ def main() -> None:
     save_environment(config.RESULTS_DIR / "environment.json")
 
     results: list[Result] = []
-    if "read" in args.only:
-        from . import bench_read
+    if "encode" in args.only:
+        from . import bench_encode
 
-        print("== read ==")
-        results += bench_read.run()
-    if "loading" in args.only:
-        from . import bench_loading
+        print("== encode ==")
+        results += bench_encode.run()
+    if "random" in args.only:
+        from . import bench_random
 
-        print("== loading ==")
-        results += bench_loading.run()
-    if "write" in args.only:
-        from . import bench_write
+        print("== random ==")
+        results += bench_random.run()
+    if "sequential" in args.only:
+        from . import bench_sequential
 
-        print("== write ==")
-        results += bench_write.run()
-    if "write_pareto" in args.only:
-        from . import bench_write_pareto
-
-        print("== write_pareto ==")
-        results += bench_write_pareto.run()
+        print("== sequential ==")
+        results += bench_sequential.run()
     if "loc" in args.only:
         from . import loc
 

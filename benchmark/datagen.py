@@ -140,9 +140,9 @@ def raw_frames(spec: VideoSpec) -> np.ndarray:
 
 
 if __name__ == "__main__":
-    from .config import READ_VIDEOS, collection_videos
+    from .config import DECODE_VIDEOS
 
     print(f"Generating into {DATA_DIR}")
-    for s in READ_VIDEOS + collection_videos():
+    for s in DECODE_VIDEOS:
         p = generate_video(s)
         print(f"  {p.name}: {p.stat().st_size / 1e6:.1f} MB")

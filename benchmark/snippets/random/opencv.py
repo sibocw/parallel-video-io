@@ -1,14 +1,13 @@
-# Decode every frame of a video.
+# Random-access decode with OpenCV (POS_FRAMES seek).
 import cv2
 
 
-def decode_all(path):
+def get_frames(path, indices):
     cap = cv2.VideoCapture(path)
     frames = []
-    while True:
+    for i in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
         ok, frame = cap.read()
-        if not ok:
-            break
         frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     cap.release()
     return frames

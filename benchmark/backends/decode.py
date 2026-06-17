@@ -1,16 +1,16 @@
-"""Frame-reading backends for the sequential and random-access benchmarks.
+"""Decoding backends for the random-access and sequential benchmarks.
 
 Every backend exposes:
 
 * ``available()`` -> (ok, reason)
-* ``sequential(path, n_frames)`` -> number of frames decoded (streams one at a
-  time; must not accumulate, so 4K videos don't blow up memory).
-* ``random(path, indices)`` -> ``(k, H, W, 3)`` uint8 ndarray on CPU, used for
-  both timing and seek-correctness checking.
+* ``sequential(path, n_frames)`` -> number of frames decoded (streamed one at a
+  time, never accumulated, so high-resolution videos don't blow up memory), if
+  ``supports_sequential``.
+* ``random(path, indices)`` -> ``(k, H, W, 3)`` uint8 RGB ndarray on CPU, used
+  for both timing and seek-correctness checking, if ``supports_random``.
 
-These mirror the *minimal idiomatic* usage of each library; the matching
-user-code snippets in ``benchmark/snippets/read`` are kept in sync for the
-lines-of-code metric.
+These mirror the minimal idiomatic usage of each library and are kept in sync
+with the ``snippets/`` files used for the lines-of-code metric.
 """
 
 from __future__ import annotations
@@ -19,9 +19,11 @@ import numpy as np
 import torch
 
 
-class ReadBackend:
+class DecodeBackend:
     name: str = "base"
     device: str = "cpu"
+    supports_sequential: bool = True
+    supports_random: bool = True
 
     def available(self) -> tuple[bool, str]:
         return True, ""
@@ -39,24 +41,20 @@ def _chw01_to_hwc_u8(frame: torch.Tensor) -> np.ndarray:
 
 
 # --------------------------------------------------------------------------- #
-# PVIO
+# PVIO — CPU and GPU (TorchCodec backend with forward buffering, exact seek)
 # --------------------------------------------------------------------------- #
-class PvioEncoded(ReadBackend):
-    """PVIO's EncodedVideo (TorchCodec backend with forward buffering) — the
-    same code path the parallel DataLoader uses."""
-
-    name = "pvio"
-    device = "cpu"
-
+class _Pvio(DecodeBackend):
     def sequential(self, path: str, n_frames: int) -> int:
         from pvio.video import EncodedVideo
 
-        vid = EncodedVideo(path, buffer_size=64)
+        vid = EncodedVideo(path, buffer_size=64, device=self.device)
         vid.setup()
         count = 0
         for i in range(len(vid)):
             vid.read_frame(i)
             count += 1
+        if self.device == "cuda":
+            torch.cuda.synchronize()
         vid.close()
         return count
 
@@ -64,40 +62,32 @@ class PvioEncoded(ReadBackend):
         from pvio.video import EncodedVideo
 
         # buffer_size=1 makes each read a single true seek (fair per-frame timing).
-        vid = EncodedVideo(path, buffer_size=1)
+        vid = EncodedVideo(path, buffer_size=1, device=self.device)
         vid.setup()
         frames = [_chw01_to_hwc_u8(vid.read_frame(i)) for i in indices]
         vid.close()
         return np.stack(frames)
 
 
-class PvioSimple(ReadBackend):
-    """PVIO's convenience reader (imageio/FFmpeg), ``read_frames_from_video``."""
-
-    name = "pvio_simple"
+class PvioCPU(_Pvio):
+    name = "pvio_cpu"
     device = "cpu"
 
-    def sequential(self, path: str, n_frames: int) -> int:
-        import imageio.v2 as imageio
 
-        # Mirror read_frames_from_video but stream instead of accumulating.
-        count = 0
-        with imageio.get_reader(path) as reader:
-            for _ in reader:
-                count += 1
-        return count
+class PvioGPU(_Pvio):
+    name = "pvio_gpu"
+    device = "cuda"
 
-    def random(self, path: str, indices: list[int]) -> np.ndarray:
-        from pvio.io import read_frames_from_video
-
-        frames, _ = read_frames_from_video(path, frame_indices=indices)
-        return np.stack(frames)
+    def available(self) -> tuple[bool, str]:
+        if not torch.cuda.is_available():
+            return False, "no CUDA device"
+        return True, ""
 
 
 # --------------------------------------------------------------------------- #
 # TorchCodec (raw) — CPU and CUDA/NVDEC
 # --------------------------------------------------------------------------- #
-class _TorchCodec(ReadBackend):
+class _TorchCodec(DecodeBackend):
     def sequential(self, path: str, n_frames: int) -> int:
         from torchcodec.decoders import VideoDecoder
 
@@ -133,9 +123,9 @@ class TorchCodecCUDA(_TorchCodec):
 
 
 # --------------------------------------------------------------------------- #
-# Decord (CPU only in the PyPI wheel)
+# Decord (CPU) — using seek_accurate for frame-accurate random access
 # --------------------------------------------------------------------------- #
-class DecordCPU(ReadBackend):
+class DecordCPU(DecodeBackend):
     name = "decord_cpu"
     device = "cpu"
 
@@ -162,13 +152,17 @@ class DecordCPU(ReadBackend):
 
         decord.bridge.set_bridge("native")
         vr = decord.VideoReader(path, ctx=decord.cpu(0))
-        return vr.get_batch(indices).asnumpy()
+        out = []
+        for idx in indices:
+            vr.seek_accurate(int(idx))  # frame-accurate seek
+            out.append(vr.next().asnumpy())
+        return np.stack(out)
 
 
 # --------------------------------------------------------------------------- #
 # PyAV (FFmpeg bindings)
 # --------------------------------------------------------------------------- #
-class PyAVCPU(ReadBackend):
+class PyAVCPU(DecodeBackend):
     name = "pyav_cpu"
     device = "cpu"
 
@@ -197,7 +191,7 @@ class PyAVCPU(ReadBackend):
             avg_rate = stream.average_rate
             time_base = stream.time_base
             for idx in indices:
-                # Seek to the nearest keyframe before the target, then decode forward.
+                # Seek to the nearest keyframe before the target, decode forward.
                 target_pts = int(idx / avg_rate / time_base)
                 container.seek(target_pts, stream=stream, backward=True)
                 chosen = None
@@ -215,7 +209,7 @@ class PyAVCPU(ReadBackend):
 # --------------------------------------------------------------------------- #
 # OpenCV
 # --------------------------------------------------------------------------- #
-class OpenCVCPU(ReadBackend):
+class OpenCVCPU(DecodeBackend):
     name = "opencv_cpu"
     device = "cpu"
 
@@ -245,7 +239,7 @@ class OpenCVCPU(ReadBackend):
         cap = cv2.VideoCapture(path)
         out = []
         for idx in indices:
-            cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(idx))
             ok, frame = cap.read()
             if not ok:
                 raise RuntimeError(f"OpenCV could not read frame {idx}")
@@ -254,12 +248,61 @@ class OpenCVCPU(ReadBackend):
         return np.stack(out)
 
 
-READ_BACKENDS: list[ReadBackend] = [
-    PvioEncoded(),
-    PvioSimple(),
+# --------------------------------------------------------------------------- #
+# NVIDIA DALI (on-GPU decode) — sequential streaming only
+# --------------------------------------------------------------------------- #
+class DaliGPU(DecodeBackend):
+    name = "dali_gpu"
+    device = "cuda"
+    supports_random = False  # DALI's video reader is a sequential pipeline
+
+    def available(self) -> tuple[bool, str]:
+        if not torch.cuda.is_available():
+            return False, "no CUDA device"
+        try:
+            import nvidia.dali  # noqa: F401
+        except Exception as e:  # pragma: no cover
+            return False, f"import failed: {e}"
+        return True, ""
+
+    def sequential(self, path: str, n_frames: int) -> int:
+        from nvidia.dali import fn, pipeline_def
+        from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
+
+        @pipeline_def(batch_size=16, num_threads=2, device_id=0)
+        def pipe():
+            return fn.readers.video(
+                device="gpu",
+                filenames=[path],
+                sequence_length=1,
+                random_shuffle=False,
+                name="reader",
+            )
+
+        p = pipe()
+        p.build()
+        it = DALIGenericIterator(
+            [p],
+            ["frames"],
+            reader_name="reader",
+            last_batch_policy=LastBatchPolicy.PARTIAL,
+        )
+        count = 0
+        for batch in it:
+            count += int(batch[0]["frames"].shape[0])
+        torch.cuda.synchronize()
+        return count
+
+
+# Conceptual order matching the COMPARE list (DALI, Decord, OpenCV, PVIO-CPU,
+# PVIO-GPU, PyAV, TorchCodec); TorchCodec and PVIO each appear as CPU + GPU.
+DECODE_BACKENDS: list[DecodeBackend] = [
+    DaliGPU(),
+    DecordCPU(),
+    OpenCVCPU(),
+    PvioCPU(),
+    PvioGPU(),
+    PyAVCPU(),
     TorchCodecCPU(),
     TorchCodecCUDA(),
-    DecordCPU(),
-    PyAVCPU(),
-    OpenCVCPU(),
 ]

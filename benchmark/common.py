@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
+import numpy as np
 import torch
 
 
@@ -132,6 +133,49 @@ class PeakMemSampler:
         if torch.cuda.is_available():
             return torch.cuda.max_memory_allocated() / (1024**2)
         return 0.0
+
+
+def jpeg_baseline_bytes(frames: np.ndarray, quality: int) -> int:
+    """Total bytes of *frames* stored individually as JPEGs (compression baseline).
+
+    Used as the denominator-free reference for the compression-ratio metric:
+    compression ratio = this / encoded-video-bytes, i.e. how much smaller the
+    video is than a folder of per-frame JPEGs at the same quality.
+    """
+    import cv2
+
+    total = 0
+    for frame in frames:
+        bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+        if not ok:
+            raise RuntimeError("cv2.imencode failed for JPEG baseline")
+        total += int(buf.size)
+    return total
+
+
+def decode_back(path: str, indices: list[int]) -> np.ndarray:
+    """Decode specific frames back as (k, H, W, 3) uint8 RGB for quality scoring."""
+    from torchcodec.decoders import VideoDecoder
+
+    dec = VideoDecoder(path, seek_mode="exact")
+    batch = dec.get_frames_at(indices).data  # NCHW uint8
+    return batch.permute(0, 2, 3, 1).cpu().numpy()
+
+
+def quality_psnr_ssim(source: np.ndarray, decoded: np.ndarray) -> tuple[float, float]:
+    """Mean PSNR (dB) and SSIM between matched source/decoded frame stacks."""
+    from skimage.metrics import peak_signal_noise_ratio, structural_similarity
+
+    # Crop to common dimensions in case a writer changed the frame size.
+    h = min(source.shape[1], decoded.shape[1])
+    w = min(source.shape[2], decoded.shape[2])
+    source, decoded = source[:, :h, :w], decoded[:, :h, :w]
+    psnrs, ssims = [], []
+    for s, d in zip(source, decoded):
+        psnrs.append(peak_signal_noise_ratio(s, d, data_range=255))
+        ssims.append(structural_similarity(s, d, channel_axis=2, data_range=255))
+    return float(np.mean(psnrs)), float(np.mean(ssims))
 
 
 def best_of(fn: Callable[[], float], repeats: int) -> float:

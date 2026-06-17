@@ -1,4 +1,4 @@
-# Decode every frame of a video.
+# Sequential decode with Decord.
 import decord
 
 

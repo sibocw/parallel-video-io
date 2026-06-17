@@ -1,12 +1,11 @@
-"""Frame-writing backends: NumPy frames -> H.264 MP4.
+"""Encoding backends: merge a sequence of NumPy frames into an H.264 MP4.
 
-Each backend writes the same uint8 RGB frames to a file. The benchmark then
-measures encode throughput, output file size, and reconstruction quality
-(PSNR/SSIM vs the source) so the speed/size/quality trade-off is visible.
-
-PVIO and PyAV are driven at the same CRF for a fair comparison. OpenCV's
-VideoWriter does not expose CRF (rate control is fixed by the FOURCC codec),
-so its quality/size point is reported as-is and flagged.
+Every backend exposes ``available()`` and ``encode(frames, fps, out_path,
+quality)``. ``quality`` is on the 0-51 H.264 quantiser scale (CRF for libx264,
+QP for NVENC); backends without a quality knob (OpenCV's mp4v) set
+``tunable = False`` and ignore it. These mirror the minimal idiomatic usage of
+each library and are kept in sync with the ``snippets/encode`` files used for
+the lines-of-code metric.
 """
 
 from __future__ import annotations
@@ -14,44 +13,36 @@ from __future__ import annotations
 import numpy as np
 
 
-class WriteBackend:
-    name = "base"
-    crf_controlled = True
+class EncodeBackend:
+    name: str = "base"
+    device: str = "cpu"
+    tunable: bool = True  # has a quality knob worth sweeping for the Pareto front
 
     def available(self) -> tuple[bool, str]:
         return True, ""
 
-    def write(self, frames: np.ndarray, fps: int, out_path: str, crf: int) -> None:
+    def encode(self, frames: np.ndarray, fps: int, out_path: str, quality: int) -> None:
         """Encode ``frames`` (N, H, W, 3) uint8 RGB to ``out_path``."""
         raise NotImplementedError
 
 
-class PvioWriter(WriteBackend):
-    """PVIO's write_frames_to_video (imageio/FFmpeg, libx264)."""
+class PvioCPUEncode(EncodeBackend):
+    """PVIO write_frames_to_video, CPU path (libx264, CRF)."""
 
-    name = "pvio"
+    name = "pvio_cpu"
+    device = "cpu"
 
-    def write(self, frames, fps, out_path, crf) -> None:
+    def encode(self, frames, fps, out_path, quality) -> None:
         from pvio.io import write_frames_to_video
 
-        # imageio already sets -pix_fmt yuv420p for libx264; don't duplicate it.
-        ffmpeg_params = ["-crf", str(crf), "-preset", "medium"]
-        write_frames_to_video(
-            out_path, list(frames), fps=fps, ffmpeg_params=ffmpeg_params
-        )
+        write_frames_to_video(out_path, list(frames), fps=fps, mode="cpu", crf=quality)
 
 
-class PvioNvencWriter(WriteBackend):
-    """PVIO's auto path on a GPU machine: H.264 NVENC (GPU encode).
+class PvioGPUEncode(EncodeBackend):
+    """PVIO write_frames_to_video, GPU path (H.264 NVENC, constant QP)."""
 
-    Uses ``write_frames_to_video`` with no explicit codec, which is exactly what
-    a user gets by default on a CUDA machine with an NVENC-capable FFmpeg. NVENC
-    uses constant-QP rate control (visually lossless, ~CRF 20), so the ``crf``
-    argument does not apply and is ignored.
-    """
-
-    name = "pvio_nvenc"
-    crf_controlled = False
+    name = "pvio_gpu"
+    device = "cuda"
 
     def available(self) -> tuple[bool, str]:
         try:
@@ -64,14 +55,17 @@ class PvioNvencWriter(WriteBackend):
             return False, "no NVENC-capable ffmpeg"
         return True, ""
 
-    def write(self, frames, fps, out_path, crf) -> None:
+    def encode(self, frames, fps, out_path, quality) -> None:
         from pvio.io import write_frames_to_video
 
-        write_frames_to_video(out_path, list(frames), fps=fps)
+        write_frames_to_video(out_path, list(frames), fps=fps, mode="gpu", qp=quality)
 
 
-class PyAVWriter(WriteBackend):
+class PyAVEncode(EncodeBackend):
+    """PyAV (FFmpeg bindings), libx264 at matched CRF/preset."""
+
     name = "pyav"
+    device = "cpu"
 
     def available(self) -> tuple[bool, str]:
         try:
@@ -80,7 +74,7 @@ class PyAVWriter(WriteBackend):
             return False, f"import failed: {e}"
         return True, ""
 
-    def write(self, frames, fps, out_path, crf) -> None:
+    def encode(self, frames, fps, out_path, quality) -> None:
         import av
 
         n, h, w, _ = frames.shape
@@ -89,7 +83,7 @@ class PyAVWriter(WriteBackend):
             stream.width = w
             stream.height = h
             stream.pix_fmt = "yuv420p"
-            stream.options = {"crf": str(crf), "preset": "medium"}
+            stream.options = {"crf": str(quality), "preset": "slow"}
             for i in range(n):
                 frame = av.VideoFrame.from_ndarray(frames[i], format="rgb24")
                 for packet in stream.encode(frame):
@@ -98,9 +92,12 @@ class PyAVWriter(WriteBackend):
                 container.mux(packet)
 
 
-class OpenCVWriter(WriteBackend):
+class OpenCVEncode(EncodeBackend):
+    """OpenCV VideoWriter (mp4v). No CRF/QP knob — single operating point."""
+
     name = "opencv"
-    crf_controlled = False
+    device = "cpu"
+    tunable = False
 
     def available(self) -> tuple[bool, str]:
         try:
@@ -109,7 +106,7 @@ class OpenCVWriter(WriteBackend):
             return False, f"import failed: {e}"
         return True, ""
 
-    def write(self, frames, fps, out_path, crf) -> None:
+    def encode(self, frames, fps, out_path, quality) -> None:
         import cv2
 
         n, h, w, _ = frames.shape
@@ -122,9 +119,9 @@ class OpenCVWriter(WriteBackend):
         writer.release()
 
 
-WRITE_BACKENDS: list[WriteBackend] = [
-    PvioWriter(),
-    PvioNvencWriter(),
-    PyAVWriter(),
-    OpenCVWriter(),
+ENCODE_BACKENDS: list[EncodeBackend] = [
+    PvioCPUEncode(),
+    PvioGPUEncode(),
+    PyAVEncode(),
+    OpenCVEncode(),
 ]

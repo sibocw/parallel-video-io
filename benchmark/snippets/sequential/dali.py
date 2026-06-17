@@ -1,13 +1,13 @@
-# Build a parallel multi-video frame loader on the GPU with DALI.
+# Sequential GPU decode with DALI.
 from nvidia.dali import fn, pipeline_def
 from nvidia.dali.plugin.pytorch import DALIGenericIterator, LastBatchPolicy
 
 
-def make_loader(paths, batch_size, num_workers):
-    @pipeline_def(batch_size=batch_size, num_threads=num_workers, device_id=0)
+def make_loader(path, batch_size=16):
+    @pipeline_def(batch_size=batch_size, num_threads=2, device_id=0)
     def pipe():
         return fn.readers.video(
-            device="gpu", filenames=paths, sequence_length=1, name="reader"
+            device="gpu", filenames=[path], sequence_length=1, name="reader"
         )
 
     p = pipe()

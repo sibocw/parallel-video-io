@@ -1,14 +1,15 @@
-"""Central configuration for the benchmark suite.
+"""Central configuration for the consolidated benchmark suite.
 
-All knobs live here so the harness can be scaled from a quick smoke run to a
-full sweep without touching the benchmark logic. Override any value via the
-matching ``PVIO_BENCH_*`` environment variable (see :func:`_env`).
+Three tasks — encoding (merge frames -> video), random access (precise seek),
+and sequential access — are measured across the video libraries. All knobs live
+here and can be overridden via the matching ``PVIO_BENCH_*`` environment
+variable, so the suite scales from a quick smoke run to a full sweep.
 """
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 # Repository-root-relative locations.
@@ -49,84 +50,50 @@ class VideoSpec:
         return DATA_DIR / f"{self.name}_frames"
 
 
-# Resolution presets (height, width).
+# Resolution presets (height, width). Encode specs use multiples of 16 so the
+# FFmpeg/imageio writer does not macroblock-pad and change the frame size.
 _RES = {
     "sd": (480, 854),
     "hd": (720, 1280),
     "fhd": (1080, 1920),
-    "uhd": (2160, 3840),
 }
 
-# Number of frames per single-video test file. Small by default so the suite
-# runs in minutes; bump via PVIO_BENCH_NFRAMES for a heavier sweep.
-NFRAMES = _env_int("NFRAMES", 600)
 FPS = _env_int("FPS", 30)
+NFRAMES = _env_int("NFRAMES", 300)
 
-# Single-file read/write test matrix: resolution x codec x GOP.
-READ_VIDEOS: list[VideoSpec] = [
-    VideoSpec("sd_h264_g30", *_RES["sd"], NFRAMES, FPS, "h264", gop=30),
-    VideoSpec("hd_h264_g30", *_RES["hd"], NFRAMES, FPS, "h264", gop=30),
-    VideoSpec("hd_h264_g120", *_RES["hd"], NFRAMES, FPS, "h264", gop=120),
-    VideoSpec("fhd_h264_g30", *_RES["fhd"], NFRAMES, FPS, "h264", gop=30),
-    VideoSpec("fhd_hevc_g30", *_RES["fhd"], NFRAMES, FPS, "hevc", gop=30),
-    VideoSpec("uhd_h264_g30", *_RES["uhd"], NFRAMES, FPS, "h264", gop=30),
+# Decode test matrix (random + sequential access), generated to disk.
+DECODE_VIDEOS: list[VideoSpec] = [
+    VideoSpec("sd_h264", *_RES["sd"], NFRAMES, FPS, "h264", gop=30),
+    VideoSpec("hd_h264", *_RES["hd"], NFRAMES, FPS, "h264", gop=30),
+    VideoSpec("fhd_h264", *_RES["fhd"], NFRAMES, FPS, "h264", gop=30),
 ]
 
-# The parallel-loading benchmark (PVIO's headline use case) streams frames from
-# many videos at once. Keep these small per-file but numerous.
-N_COLLECTION_VIDEOS = _env_int("N_COLLECTION_VIDEOS", 32)
-COLLECTION_NFRAMES = _env_int("COLLECTION_NFRAMES", 300)
-COLLECTION_RES = _RES[_env("COLLECTION_RES", "hd")]
-COLLECTION_CODEC = _env("COLLECTION_CODEC", "h264")
-COLLECTION_GOP = _env_int("COLLECTION_GOP", 30)
+# Encode test specs (frames held in memory so they can be re-decoded for quality
+# scoring). Dimensions are multiples of 16.
+_ENCODE_NFRAMES = _env_int("ENCODE_NFRAMES", 150)
+ENCODE_SPECS: list[VideoSpec] = [
+    VideoSpec("enc_sd", 480, 848, _ENCODE_NFRAMES, FPS, "h264", gop=30),
+    VideoSpec("enc_hd", 720, 1280, _ENCODE_NFRAMES, FPS, "h264", gop=30),
+]
+
+# Quality used for the single-point ("similar effective params") comparison, and
+# the sweep used to trace each encoder's speed-vs-compression Pareto front. Both
+# are on the 0-51 H.264 quantiser scale (CRF for libx264, QP for NVENC).
+DEFAULT_QUALITY = _env_int("QUALITY", 20)
 
 
-def collection_videos() -> list[VideoSpec]:
-    """Specs for the multi-video collection used by the loading benchmark.
-
-    Frame counts are deliberately *uneven* (cycling between ~1/3 and full
-    length). This exercises PVIO's frame-level load balancing against the
-    common "shard whole videos across workers" baseline, which becomes
-    imbalanced when videos differ in length.
-    """
-    h, w = COLLECTION_RES
-    lo = max(30, COLLECTION_NFRAMES // 3)
-    specs = []
-    for i in range(N_COLLECTION_VIDEOS):
-        frac = (i % 4) / 3.0  # 0, 1/3, 2/3, 1, repeating
-        n = int(lo + frac * (COLLECTION_NFRAMES - lo))
-        specs.append(
-            VideoSpec(
-                f"coll_{i:03d}", h, w, n, FPS, COLLECTION_CODEC, gop=COLLECTION_GOP
-            )
-        )
-    return specs
-
-
-# Random-access read benchmark: how many random frames to fetch per video.
-N_RANDOM_READS = _env_int("N_RANDOM_READS", 100)
-
-
-# Worker counts swept in the loading benchmark. Capped to available cores at run
-# time. "0" means PVIO's single-process path.
-def worker_sweep() -> list[int]:
-    raw = _env("WORKER_SWEEP", "1,2,4,8")
+def quality_sweep() -> list[int]:
+    raw = _env("QUALITY_SWEEP", "16,20,24,28,34")
     return [int(x) for x in raw.split(",") if x.strip()]
 
 
-# Batch size for the loading benchmark.
-LOADING_BATCH_SIZE = _env_int("LOADING_BATCH_SIZE", 16)
+# Per-frame JPEG quality used as the compression-ratio baseline: compression
+# ratio = (sum of per-frame JPEG bytes) / (encoded video bytes), i.e. how much
+# smaller the video is than storing each frame as a high-quality JPEG.
+JPEG_QUALITY = _env_int("JPEG_QUALITY", 95)
 
-# Number of timed repeats for the (fast) read/write micro-benchmarks.
+# Random-access benchmark: how many random frames to fetch per video.
+N_RANDOM_READS = _env_int("N_RANDOM_READS", 100)
+
+# Number of timed repeats; the best (fastest) run is reported.
 N_REPEATS = _env_int("N_REPEATS", 3)
-
-
-@dataclass
-class RunConfig:
-    """Top-level switches for an end-to-end run."""
-
-    read: bool = True
-    write: bool = True
-    loading: bool = True
-    loc: bool = True
-    seed: int = field(default_factory=lambda: _env_int("SEED", 0))

@@ -1,13 +1,14 @@
-# Read specific frames by index.
+# Sequential decode with OpenCV.
 import cv2
 
 
-def get_frames(path, indices):
+def decode_all(path):
     cap = cv2.VideoCapture(path)
     frames = []
-    for idx in indices:
-        cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
+    while True:
         ok, frame = cap.read()
+        if not ok:
+            break
         frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
     cap.release()
     return frames

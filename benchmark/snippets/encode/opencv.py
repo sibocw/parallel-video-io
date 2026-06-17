@@ -1,4 +1,4 @@
-# Write NumPy frames to an MP4.
+# Merge frames into an MP4 with OpenCV (mp4v).
 import cv2
 
 

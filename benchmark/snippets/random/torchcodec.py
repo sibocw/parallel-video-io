@@ -1,4 +1,4 @@
-# Read specific frames by index.
+# Precise random-access decode (exact seek).
 from torchcodec.decoders import VideoDecoder
 
 
