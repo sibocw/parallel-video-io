@@ -371,6 +371,14 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
                     requested_workers,
                 )
             kwargs["num_workers"] = 0
+            # Frames are already GPU-resident, so host-memory pinning is both
+            # pointless and impossible (pin_memory cannot pin CUDA tensors).
+            if kwargs.get("pin_memory"):
+                logger.info(
+                    "GPU decoding selected; disabling pin_memory (frames are already "
+                    "on the GPU, so there is nothing to pin)."
+                )
+            kwargs["pin_memory"] = False
 
         logger.info(f"Creating VideoCollectionDataset with {len(video_objects)} videos")
         dataset = VideoCollectionDataset(
