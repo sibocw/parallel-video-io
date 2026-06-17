@@ -445,6 +445,20 @@ class TestImageDirVideoComprehensive:
         with pytest.raises(RuntimeError):
             len(video)
 
+    def test_16bit_image_normalized_by_dtype_max(self, tmp_path: Path):
+        """16-bit images are normalized by 65535, not 255 (scientific TIFFs)."""
+        d = tmp_path / "f16"
+        d.mkdir()
+        val = 30000
+        img = np.full((8, 8), fill_value=val, dtype=np.uint16)
+        imageio.imwrite(d / "frame_000.tif", img)
+
+        video = ImageDirVideo(d)
+        video.setup()
+        frame = video.read_frame(0)
+        assert frame.max().item() <= 1.0  # would be ~117 if divided by 255
+        assert abs(frame.mean().item() - val / 65535.0) < 1e-3
+
     def test_grayscale_image_gets_channel_dim(self, tmp_path: Path):
         """Grayscale images are returned as (1, H, W) tensors."""
         d = tmp_path / "gray"

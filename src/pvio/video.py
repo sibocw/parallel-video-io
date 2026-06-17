@@ -28,6 +28,26 @@ _DECODER_INIT_LOCK_PATH = (
 )
 
 
+def _chw_to_float01(
+    frame: torch.Tensor, transform: Callable | None = None
+) -> torch.Tensor:
+    """Convert a CHW frame tensor to float32 in ``[0, 1]`` and apply *transform*.
+
+    Integer frames are divided by their dtype's maximum (255 for ``uint8``, 65535
+    for ``uint16``, ...), so 16-bit images such as scientific TIFFs are scaled
+    correctly instead of being assumed 8-bit. Floating-point frames are passed
+    through as float32 unchanged (assumed already normalised). Shared by all
+    backends so normalisation behaves identically everywhere.
+    """
+    if frame.is_floating_point():
+        frame = frame.float()
+    else:
+        frame = frame.float() / torch.iinfo(frame.dtype).max
+    if transform is not None:
+        frame = transform(frame)
+    return frame
+
+
 class Video(ABC):
     def __init__(
         self,
@@ -277,7 +297,7 @@ class EncodedVideo(Video):
         # 64-frame buffer of high-resolution frames fit in GPU memory) and so the
         # cached frame is never contaminated by a previously-applied transform.
         if vir_frame_id in self._buffer:
-            return self._normalize(self._buffer[vir_frame_id], transform)
+            return _chw_to_float01(self._buffer[vir_frame_id], transform)
 
         # Buffer has expired - expunge & refill
         # (loading many frames at once reduces decoding overhead)
@@ -293,15 +313,7 @@ class EncodedVideo(Video):
         for i, _vfid in enumerate(vir_frame_ids_to_buffer):
             self._buffer[_vfid] = batch_frames[i, ...]  # store raw uint8
 
-        return self._normalize(self._buffer[vir_frame_id], transform)
-
-    @staticmethod
-    def _normalize(frame_u8: torch.Tensor, transform: Callable | None) -> torch.Tensor:
-        """Convert a CHW uint8 frame to float32 in [0, 1] and apply *transform*."""
-        frame = frame_u8.float() / 255.0
-        if transform is not None:
-            frame = transform(frame)
-        return frame
+        return _chw_to_float01(self._buffer[vir_frame_id], transform)
 
     def _decode_buffer(self, phy_frame_ids: np.ndarray) -> torch.Tensor:
         """Decode a batch of physical frame ids, with a GPU-OOM safety net.
@@ -525,11 +537,9 @@ class ImageDirVideo(Video):
             raise IndexError(f"Frame index {index} out of bounds")
         frame_path = self.vir_frame_id_to_path[vir_frame_id]
         frame = imageio.imread(frame_path)
-        frame = torch.from_numpy(frame)
+        frame = torch.from_numpy(np.ascontiguousarray(frame))
         if frame.ndim == 2:
             frame = frame.unsqueeze(-1)  # grayscale image, add channel dim
         frame = frame.permute(2, 0, 1)  # HWC to CHW
-        frame = frame.float() / 255.0  # normalize to [0, 1]
-        if transform is not None:
-            frame = transform(frame)
-        return frame
+        # Normalize by the dtype max so 16-bit images (e.g. TIFFs) scale correctly.
+        return _chw_to_float01(frame, transform)
