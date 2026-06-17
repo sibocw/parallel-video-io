@@ -456,30 +456,24 @@ def _resolve_n_workers_spec(n_workers: int) -> int:
         ValueError: If *n_workers* is less than ``-n_cpu_cores``.
     """
     n_cpu_cores = cpu_count()
-    n_workers_resolved = None
 
-    if n_workers < -n_cpu_cores:
-        pass  # cannot resolve
-    elif -n_cpu_cores <= n_workers < 0:
-        n_workers_resolved = n_workers + n_cpu_cores + 1
-        logger.info(
-            f"n_workers_spec={n_workers} interpreted as {n_workers_resolved} workers "
-            f"(n_cpu_cores={n_cpu_cores})."
-        )
-    elif n_workers == 0:
+    if n_workers > 0:
+        return n_workers
+    if n_workers == 0:
         logger.info(
             "n_workers_spec=0 interpreted as 1 worker. Processing in main thread not "
             "implemented; will use a single worker process/thread instead."
         )
         return 1
-    elif n_workers > 0:
-        return n_workers
-    else:
-        pass  # cannot resolve (n_workers < -n_cpu_cores)
-
-    if n_workers_resolved is None:
+    if n_workers < -n_cpu_cores:
         raise ValueError(
             f"Invalid n_workers_spec={n_workers}. Must be >= {-n_cpu_cores} "
             f"(n_cpu_cores={n_cpu_cores})."
         )
+    # Negative within range: follow the joblib convention (-1 = all cores).
+    n_workers_resolved = n_workers + n_cpu_cores + 1
+    logger.info(
+        f"n_workers_spec={n_workers} interpreted as {n_workers_resolved} workers "
+        f"(n_cpu_cores={n_cpu_cores})."
+    )
     return n_workers_resolved
