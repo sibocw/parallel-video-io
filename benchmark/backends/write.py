@@ -41,6 +41,35 @@ class PvioWriter(WriteBackend):
         )
 
 
+class PvioNvencWriter(WriteBackend):
+    """PVIO's auto path on a GPU machine: H.264 NVENC (GPU encode).
+
+    Uses ``write_frames_to_video`` with no explicit codec, which is exactly what
+    a user gets by default on a CUDA machine with an NVENC-capable FFmpeg. NVENC
+    uses constant-QP rate control (visually lossless, ~CRF 20), so the ``crf``
+    argument does not apply and is ignored.
+    """
+
+    name = "pvio_nvenc"
+    crf_controlled = False
+
+    def available(self) -> tuple[bool, str]:
+        try:
+            from pvio import _accel
+        except Exception as e:  # pragma: no cover
+            return False, f"import failed: {e}"
+        if not _accel.cuda_available():
+            return False, "no CUDA device"
+        if _accel.nvenc_ffmpeg_exe() is None:
+            return False, "no NVENC-capable ffmpeg"
+        return True, ""
+
+    def write(self, frames, fps, out_path, crf) -> None:
+        from pvio.io import write_frames_to_video
+
+        write_frames_to_video(out_path, list(frames), fps=fps)
+
+
 class PyAVWriter(WriteBackend):
     name = "pyav"
 
@@ -93,4 +122,9 @@ class OpenCVWriter(WriteBackend):
         writer.release()
 
 
-WRITE_BACKENDS: list[WriteBackend] = [PvioWriter(), PyAVWriter(), OpenCVWriter()]
+WRITE_BACKENDS: list[WriteBackend] = [
+    PvioWriter(),
+    PvioNvencWriter(),
+    PyAVWriter(),
+    OpenCVWriter(),
+]

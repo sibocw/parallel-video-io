@@ -84,10 +84,14 @@ def _write_summary(df, path) -> None:
             "backend",
             "metric_main",
             "x_file_size_mb",
+            "x_compression_ratio",
             "x_psnr_db",
             "x_ssim",
         ]
-        section("Write (speed / size / quality)", _render_md_table(s[cols].round(3)))
+        section(
+            "Write (speed / size / compression / quality)",
+            _render_md_table(s[cols].round(3)),
+        )
     if (s := df[df["task"] == "loc"]).shape[0]:
         p = s.pivot_table(index="workload", columns="backend", values="metric_main")
         section(

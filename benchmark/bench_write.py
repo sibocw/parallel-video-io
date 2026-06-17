@@ -70,7 +70,13 @@ def _bench_one(backend, spec, frames) -> Result:
                 return len(frames) / t[0]
 
             enc_fps = best_of(run, config.N_REPEATS)
-            size_mb = Path(out).stat().st_size / 1e6
+            size_bytes = Path(out).stat().st_size
+            size_mb = size_bytes / 1e6
+
+            # Compression ratio vs the raw uncompressed RGB frames (higher =
+            # smaller file relative to the source). raw_bytes assumes 8-bit RGB.
+            raw_bytes = int(frames.size)  # N * H * W * 3 uint8 elements = bytes
+            compression_ratio = raw_bytes / size_bytes if size_bytes else float("nan")
 
             idx = (
                 np.linspace(0, len(frames) - 1, _N_QUALITY_FRAMES).astype(int).tolist()
@@ -87,6 +93,7 @@ def _bench_one(backend, spec, frames) -> Result:
             "frames/s",
             extra={
                 "file_size_mb": round(size_mb, 2),
+                "compression_ratio": round(compression_ratio, 1),
                 "psnr_db": round(psnr, 2),
                 "ssim": round(ssim, 4),
                 "crf_controlled": backend.crf_controlled,
