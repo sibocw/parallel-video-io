@@ -273,8 +273,19 @@ class VideoCollectionDataLoader(DataLoader):
     @staticmethod
     def _collate(batch):
         """Receives a list of frame dicts, returns a batched dict"""
+        frames = [item["frame"] for item in batch]
+        # A collection may mix GPU-decoded videos (EncodedVideo on CUDA) with
+        # CPU-decoded ones (e.g. ImageDirVideo), producing frames on different
+        # devices that cannot be stacked directly. Promote everything to a CUDA
+        # device when any frame is already there, keeping the batch GPU-resident.
+        if len({f.device for f in frames}) > 1:
+            target = next(
+                (f.device for f in frames if f.device.type == "cuda"),
+                frames[0].device,
+            )
+            frames = [f.to(target) for f in frames]
         return {
-            "frames": torch.stack([item["frame"] for item in batch]),
+            "frames": torch.stack(frames),
             "video_indices": [item["video_id"] for item in batch],
             "frame_indices": [item["frame_id"] for item in batch],
         }
@@ -292,6 +303,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         n_frame_counting_workers: int = -1,
         progress_bar: bool | None = None,
         min_frames_per_worker: int = 300,
+        device: str | None = None,
         **kwargs: Any,
     ) -> None:
         """Create a VideoCollectionDataset and VideoCollectionDataLoader in one call.
@@ -300,6 +312,13 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         or a path (str / Path). Paths pointing to files become
         :class:`EncodedVideo`; paths pointing to directories become
         :class:`ImageDirVideo`.
+
+        The decode workflow is selected automatically: on a machine with a CUDA
+        GPU, file-backed videos decode on the GPU (NVDEC) and iteration runs in
+        the main process (``num_workers`` is forced to 0, since CUDA cannot be
+        used in forked workers); on a CPU-only machine, decoding uses the
+        requested number of CPU workers as before. Pass ``device="cpu"`` to opt
+        out and keep multi-worker CPU decoding even when a GPU is present.
 
         Args:
             videos: Video sources.
@@ -317,6 +336,9 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
                 Defaults to ``True`` when stderr is a TTY.
             min_frames_per_worker: Minimum frames per worker; see
                 :meth:`VideoCollectionDataset.assign_workers`.
+            device: Decode device for file-backed videos, forwarded to
+                :class:`EncodedVideo`. ``None`` (default) auto-selects the GPU
+                when available; ``"cpu"``/``"cuda"`` force a choice.
             **kwargs: Forwarded to :class:`~torch.utils.data.DataLoader`.
         """
         logger.info(
@@ -327,7 +349,28 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
             buffer_size=buffer_size,
             frame_id_regex=frame_id_regex,
             use_cached_video_metadata=use_cached_video_metadata,
+            device=device,
         )
+
+        # On the GPU decode path, iteration must run in the main process: CUDA
+        # cannot be initialised in forked DataLoader workers. If any file-backed
+        # video will decode on CUDA, force num_workers=0 so frames are decoded on
+        # the GPU rather than silently downgraded to CPU in worker subprocesses.
+        gpu_decode = any(
+            isinstance(v, EncodedVideo) and str(v.device).startswith("cuda")
+            for v in video_objects
+        )
+        if gpu_decode:
+            requested_workers = kwargs.get("num_workers", 0)
+            if requested_workers not in (0, None):
+                logger.info(
+                    "GPU decoding selected; forcing num_workers=0 so iteration runs "
+                    "in the main process (was %s). CUDA cannot be used in forked "
+                    "DataLoader workers. Pass device='cpu' to keep CPU multi-worker "
+                    "loading.",
+                    requested_workers,
+                )
+            kwargs["num_workers"] = 0
 
         logger.info(f"Creating VideoCollectionDataset with {len(video_objects)} videos")
         dataset = VideoCollectionDataset(
@@ -353,6 +396,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
         buffer_size: int,
         frame_id_regex: str | re.Pattern | None,
         use_cached_video_metadata: bool,
+        device: str | None = None,
     ) -> list[Video]:
         videos_resolved = []
         for video_spec in video_specs:
@@ -374,6 +418,7 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
                         buffer_size=buffer_size,
                         cache_metadata=True,  # will be cached anyway upon dataset init
                         use_cached_metadata=use_cached_video_metadata,
+                        device=device,
                     )
                 else:
                     raise FileNotFoundError(f"Video path {path} does not exist.")

@@ -3,11 +3,37 @@ import json
 import logging
 import os
 import tempfile
+import contextlib
 import imageio.v2 as imageio
 from pathlib import Path
 
+from . import _accel
+
 
 logger = logging.getLogger(__name__)
+
+
+@contextlib.contextmanager
+def _imageio_ffmpeg_exe(exe: str | None):
+    """Temporarily point imageio-ffmpeg at *exe* via ``IMAGEIO_FFMPEG_EXE``.
+
+    Used to route NVENC encodes through a system FFmpeg, since the binary
+    bundled with imageio-ffmpeg is usually built without NVENC. A no-op when
+    *exe* is None. Restores the previous environment on exit.
+    """
+    if exe is None:
+        yield
+        return
+    sentinel = object()
+    prev = os.environ.get("IMAGEIO_FFMPEG_EXE", sentinel)
+    os.environ["IMAGEIO_FFMPEG_EXE"] = exe
+    try:
+        yield
+    finally:
+        if prev is sentinel:
+            os.environ.pop("IMAGEIO_FFMPEG_EXE", None)
+        else:
+            os.environ["IMAGEIO_FFMPEG_EXE"] = prev
 
 
 def read_frames_from_video(
@@ -38,24 +64,36 @@ def write_frames_to_video(
     video_path: Path | str,
     frames: list[np.ndarray],
     fps: float,
-    codec: str = "libx264",
+    codec: str | None = None,
     ffmpeg_params: list[str] | None = None,
     log_interval: int | None = None,
 ) -> None:
     """Write a sequence of frames to a video file.
+
+    By default the codec is chosen automatically: on a machine with a CUDA GPU
+    and an NVENC-capable FFmpeg, frames are encoded with the GPU (H.264 NVENC at
+    a visually-lossless setting, comparable to libx264 CRF 20); otherwise they
+    fall back to libx264 on the CPU. The auto path also falls back to libx264 if
+    an NVENC encode fails for any reason (e.g. frames below NVENC's minimum
+    size), so output is always produced.
 
     Args:
         video_path: Path for the output video file.
         frames: Frames as uint8 numpy arrays in ``(H, W, C)`` format. All
             frames must share the same spatial dimensions.
         fps: Frames per second of the output video.
-        codec: FFmpeg codec name. Default: ``"libx264"``.
-        ffmpeg_params: Raw FFmpeg parameter list. If ``None``, uses
-            high-quality H.264 defaults (CRF 20, slow preset, high profile).
-            CRF 20 is more conservative than FFmpeg's default of 23, which is
-            appropriate for scientific data where quality loss should be
-            minimal. Lower values (e.g. 18) produce higher quality at the
-            cost of larger file sizes.
+        codec: FFmpeg codec name. If ``None`` (default), the codec is selected
+            automatically (NVENC on GPU, else libx264). Pass an explicit codec
+            (e.g. ``"libx264"``, ``"h264_nvenc"``) to override auto-selection.
+        ffmpeg_params: Raw FFmpeg parameter list. When ``None`` the parameters
+            matching the selected codec are used (CRF 20 / slow / high profile
+            for libx264; visually-lossless constant-QP for NVENC). Passing this
+            explicitly while leaving *codec* as ``None`` keeps the libx264
+            defaults (GPU auto-selection is disabled, since custom parameters
+            are codec-specific). CRF 20 is more conservative than FFmpeg's
+            default of 23, appropriate for scientific data where quality loss
+            should be minimal; lower values produce higher quality at the cost
+            of larger files.
         log_interval: If set, log progress every *log_interval* frames at
             ``INFO`` level.
 
@@ -63,18 +101,6 @@ def write_frames_to_video(
         ValueError: If *frames* is empty or contains frames with mismatched
             dimensions.
     """
-    if ffmpeg_params is None:
-        ffmpeg_params = [
-            "-crf",
-            "20",  # Lower = higher quality; 20 is conservative vs FFmpeg's default 23
-            "-preset",
-            "slow",  # Slower preset = better compression efficiency
-            "-profile:v",
-            "high",  # Use high profile for better compression
-            "-level",
-            "4.0",  # H.264 level
-        ]
-
     # Check frame size consistency
     if len(frames) == 0:
         raise ValueError("No frames provided to write_frames_to_video")
@@ -85,14 +111,67 @@ def write_frames_to_video(
                 "All frames must have the same dimensions. The 0th frame has size "
                 f"{frame_size}, but at least one frame has size {frame.shape[:2]}."
             )
+    height, width = frame_size[0], frame_size[1]
 
-    # Use imageio to write video with ffmpeg backend
+    # Resolve the encode plan as a list of (codec, params, ffmpeg_exe) attempts.
+    # The auto path tries NVENC first (when usable) and always keeps a libx264
+    # fallback so output is produced even if the GPU encode fails.
+    attempts: list[tuple[str, list[str], str | None]] = []
+    if codec is not None:
+        # Explicit codec: honour it verbatim, no auto-selection or fallback.
+        params = ffmpeg_params if ffmpeg_params is not None else _accel.LIBX264_PARAMS
+        attempts.append((codec, params, None))
+    elif ffmpeg_params is not None:
+        # Custom params but no codec: parameters are codec-specific, so stay on
+        # the libx264 default rather than silently switching to NVENC.
+        attempts.append((_accel.LIBX264_CODEC, ffmpeg_params, None))
+    else:
+        # Pure auto: NVENC when available, with a libx264 fallback.
+        if _accel.can_use_nvenc(height, width):
+            attempts.append(
+                (_accel.NVENC_CODEC, _accel.NVENC_PARAMS, _accel.nvenc_ffmpeg_exe())
+            )
+        attempts.append((_accel.LIBX264_CODEC, _accel.LIBX264_PARAMS, None))
+
+    last_error: Exception | None = None
+    for attempt_idx, (attempt_codec, attempt_params, ffmpeg_exe) in enumerate(attempts):
+        is_last = attempt_idx == len(attempts) - 1
+        try:
+            with _imageio_ffmpeg_exe(ffmpeg_exe):
+                _encode_frames(
+                    video_path, frames, fps, attempt_codec, attempt_params, log_interval
+                )
+            return
+        except Exception as e:
+            last_error = e
+            if is_last:
+                raise
+            logger.warning(
+                "Encoding with codec %r failed (%s); falling back to %r.",
+                attempt_codec,
+                e,
+                attempts[attempt_idx + 1][0],
+            )
+    # Unreachable: the last attempt either returns or re-raises.
+    if last_error is not None:  # pragma: no cover - defensive
+        raise last_error
+
+
+def _encode_frames(
+    video_path: Path | str,
+    frames: list[np.ndarray],
+    fps: float,
+    codec: str,
+    ffmpeg_params: list[str],
+    log_interval: int | None,
+) -> None:
+    """Encode *frames* to *video_path* with imageio's FFmpeg backend."""
     with imageio.get_writer(
         str(video_path),
         "ffmpeg",
         fps=fps,
         codec=codec,
-        quality=None,  # Use CRF (in ffmpeg_params) instead of quality
+        quality=None,  # Use CRF/QP (in ffmpeg_params) instead of quality
         ffmpeg_params=ffmpeg_params,
     ) as video_writer:
         for i, frame in enumerate(frames):

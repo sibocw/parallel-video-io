@@ -7,12 +7,14 @@ from abc import abstractmethod, ABC
 from time import time
 from typing import Any, Callable
 from torchcodec.decoders import VideoDecoder
+from torch.utils.data import get_worker_info
 from pathlib import Path
 import os
 import tempfile
 import fcntl
 
 from .io import get_video_metadata
+from . import _accel
 
 
 logger = logging.getLogger(__name__)
@@ -201,6 +203,7 @@ class EncodedVideo(Video):
         buffer_size: int = 64,
         cache_metadata: bool = True,
         use_cached_metadata: bool = True,
+        device: str | None = None,
     ):
         """Video backend for "real" video files (e.g., mp4, mkv, etc.) using TorchCodec.
 
@@ -216,11 +219,23 @@ class EncodedVideo(Video):
                 subsequent metadata reads.
             use_cached_metadata (bool): Whether to use cached metadata when available.
                 Set to False to force re-load metadata.
+            device (str | None): Decode device for TorchCodec. ``None`` (default)
+                auto-selects ``"cuda"`` when a CUDA GPU is available and ``"cpu"``
+                otherwise; pass ``"cpu"`` or ``"cuda"`` to force a choice. Exact
+                (frame-accurate) seeking is preserved on either device. GPU
+                decoding returns frames already resident in GPU memory. Note that
+                CUDA cannot be initialised inside forked DataLoader worker
+                processes, so when this object is iterated under
+                ``num_workers > 0`` the decoder automatically downgrades to CPU in
+                the workers; use the single-process path (``num_workers=0``, as
+                ``SimpleVideoCollectionLoader`` arranges automatically) to keep
+                decoding on the GPU.
         """
         super().__init__(path, frame_range)
         self.buffer_size = buffer_size
         self.cache_metadata = cache_metadata
         self.use_cached_metadata = use_cached_metadata
+        self.device = _accel.resolve_decode_device(device)
 
         # The following are to be managed by `.read_frame()`
         self._decoder: VideoDecoder | None = None
@@ -252,7 +267,7 @@ class EncodedVideo(Video):
     def _read_frame(self, index: int, transform: Callable | None) -> torch.Tensor:
         # If this is the first time reading from this video, initialize the decoder
         if self._decoder is None:
-            self._decoder = self._create_video_decoder(self.path)
+            self._decoder = self._create_video_decoder(self.path, self.device)
 
         vir_frame_id = index  # `index` is the virtual frame_id - make alias for clarity
 
@@ -284,7 +299,7 @@ class EncodedVideo(Video):
         return frame
 
     @staticmethod
-    def _create_video_decoder(video_path: Path) -> VideoDecoder:
+    def _create_video_decoder(video_path: Path, device: str = "cpu") -> VideoDecoder:
         """Create a TorchCodec VideoDecoder while holding a shared init lock.
 
         Historically, constructing decoders concurrently across worker processes
@@ -303,12 +318,48 @@ class EncodedVideo(Video):
         previous per-instance lock, which never serialized workers decoding
         different videos. It is held only during construction; frame reads run fully
         in parallel. See
-        https://ffmpeg.org/pipermail/libav-user/2014-August/007298.html"""
+        https://ffmpeg.org/pipermail/libav-user/2014-August/007298.html
+
+        ``device`` selects CPU or CUDA (NVDEC) decoding; ``seek_mode="exact"`` keeps
+        frame-accurate seeking on either. CUDA cannot be initialised inside a forked
+        DataLoader worker, so a ``"cuda"`` request is downgraded to ``"cpu"`` when
+        running in a worker subprocess. As a final safety net, a failed GPU decoder
+        construction falls back to CPU rather than propagating the error."""
+        if device.startswith("cuda") and get_worker_info() is not None:
+            # Forked DataLoader workers cannot (re)initialise CUDA. Decode on CPU
+            # here; the GPU path is intended for single-process iteration.
+            logger.debug(
+                "Running inside a DataLoader worker; decoding %s on CPU instead of %s.",
+                video_path,
+                device,
+            )
+            device = "cpu"
+
         with open(_DECODER_INIT_LOCK_PATH, "w") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            decoder = VideoDecoder(
-                video_path.as_posix(), seek_mode="exact", dimension_order="NCHW"
-            )
+            try:
+                decoder = VideoDecoder(
+                    video_path.as_posix(),
+                    seek_mode="exact",
+                    dimension_order="NCHW",
+                    device=device,
+                )
+            except Exception as e:
+                if device == "cpu":
+                    raise
+                logger.warning(
+                    "GPU decoder construction failed for %s on device %r (%s); "
+                    "falling back to CPU decoding.",
+                    video_path,
+                    device,
+                    e,
+                )
+                decoder = VideoDecoder(
+                    video_path.as_posix(),
+                    seek_mode="exact",
+                    dimension_order="NCHW",
+                    device="cpu",
+                )
         return decoder
 
     def close(self):
