@@ -5,10 +5,10 @@ if sys.platform != "linux":
         f"parallel-video-io only supports Linux. Current platform: {sys.platform!r}."
     )
 
-from . import io
-from . import torch_tools
-from . import video
-
+# Curate a flat public API. The submodules (pvio.io, pvio.video, pvio.torch_tools)
+# remain importable directly (e.g. `from pvio.io import ...`) but are intentionally
+# not re-exported as bare names here, so there is one obvious way to reach each
+# symbol and `from pvio import io` does not shadow the stdlib `io` module.
 from .io import (
     read_frames_from_video,
     write_frames_to_video,
@@ -24,9 +24,6 @@ from .torch_tools import (
 )
 
 __all__ = [
-    "io",
-    "torch_tools",
-    "video",
     "read_frames_from_video",
     "write_frames_to_video",
     "check_num_frames",
