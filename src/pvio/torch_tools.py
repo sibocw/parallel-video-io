@@ -352,16 +352,18 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
             device=device,
         )
 
-        # On the GPU decode path, iteration must run in the main process: CUDA
-        # cannot be initialised in forked DataLoader workers. If any file-backed
-        # video will decode on CUDA, force num_workers=0 so frames are decoded on
-        # the GPU rather than silently downgraded to CPU in worker subprocesses.
+        # Resolve num_workers (and pin_memory) once, up front. On the GPU decode
+        # path iteration must run in the main process — CUDA cannot be initialised
+        # in forked DataLoader workers — so any CUDA-backed video forces
+        # num_workers=0. Otherwise a negative spec follows the joblib convention
+        # (-1 = all cores) and 0 is left as the standard main-process default
+        # (VideoCollectionDataLoader still calls assign_workers(1) for it).
         gpu_decode = any(
             isinstance(v, EncodedVideo) and str(v.device).startswith("cuda")
             for v in video_objects
         )
+        requested_workers = kwargs.get("num_workers", 0)  # 0 is the DataLoader default
         if gpu_decode:
-            requested_workers = kwargs.get("num_workers", 0)
             if requested_workers not in (0, None):
                 logger.info(
                     "GPU decoding selected; forcing num_workers=0 so iteration runs "
@@ -379,6 +381,8 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
                     "on the GPU, so there is nothing to pin)."
                 )
             kwargs["pin_memory"] = False
+        elif requested_workers not in (0, None):
+            kwargs["num_workers"] = _resolve_n_workers_spec(requested_workers)
 
         logger.info(f"Creating VideoCollectionDataset with {len(video_objects)} videos")
         dataset = VideoCollectionDataset(
@@ -388,12 +392,6 @@ class SimpleVideoCollectionLoader(VideoCollectionDataLoader):
             n_frame_counting_workers=n_frame_counting_workers,
             progress_bar=progress_bar,
         )
-
-        num_workers = kwargs.get("num_workers", 0)  # 0 is normal DataLoader default
-        if num_workers != 0:
-            kwargs["num_workers"] = _resolve_n_workers_spec(num_workers)
-        # num_workers=0 is passed through as-is; VideoCollectionDataLoader handles it by
-        # running in the main process while still calling assign_workers(1)
 
         logger.info("Creating VideoCollectionDataLoader")
         super().__init__(dataset, min_frames_per_worker=min_frames_per_worker, **kwargs)
