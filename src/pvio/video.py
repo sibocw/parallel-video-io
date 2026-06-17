@@ -288,7 +288,7 @@ class EncodedVideo(Video):
         phy_frame_ids_to_buffer = (
             vir_frame_ids_to_buffer + self.frame_range_effective[0]
         )
-        batch_frames = self._decoder.get_frames_at(phy_frame_ids_to_buffer).data  # NCHW
+        batch_frames = self._decode_buffer(phy_frame_ids_to_buffer)  # NCHW uint8
         batch_frames = batch_frames.float() / 255.0  # normalize to [0, 1]
         for i, _vfid in enumerate(vir_frame_ids_to_buffer):
             self._buffer[_vfid] = batch_frames[i, ...]  # store pre-transform
@@ -297,6 +297,33 @@ class EncodedVideo(Video):
         if transform is not None:
             frame = transform(frame)
         return frame
+
+    def _decode_buffer(self, phy_frame_ids: np.ndarray) -> torch.Tensor:
+        """Decode a batch of physical frame ids, with a GPU-OOM safety net.
+
+        Decoding a buffer of large frames on the GPU can exhaust device memory
+        (e.g. a 64-frame buffer of 4K frames is several GB). When that happens,
+        permanently switch this video to CPU decoding and retry, rather than
+        crashing — throughput drops for this video but results are still
+        produced. Non-OOM errors propagate unchanged.
+        """
+        try:
+            return self._decoder.get_frames_at(phy_frame_ids).data  # NCHW uint8
+        except torch.cuda.OutOfMemoryError:
+            if not str(self.device).startswith("cuda"):
+                raise
+            logger.warning(
+                "GPU ran out of memory decoding %s (buffer_size=%d at this "
+                "resolution is too large for device memory); falling back to CPU "
+                "decoding for this video. Reduce buffer_size to keep GPU decoding.",
+                self.path,
+                self.buffer_size,
+            )
+            self._decoder = None
+            torch.cuda.empty_cache()
+            self.device = "cpu"
+            self._decoder = self._create_video_decoder(self.path, "cpu")
+            return self._decoder.get_frames_at(phy_frame_ids).data
 
     @staticmethod
     def _create_video_decoder(video_path: Path, device: str = "cpu") -> VideoDecoder:
