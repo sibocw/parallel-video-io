@@ -502,12 +502,33 @@ def _read_metadata_cache(cache_path: Path, video_path: Path) -> VideoMetadata | 
     # Cheap guard failed (or is absent): fall back to the authoritative checksum
     # before declaring the cache stale, so a mere touch/copy doesn't force a full
     # metadata re-read when the bytes are actually unchanged.
-    if not signature_matches and cached_checksum != _compute_file_checksum(video_path):
+    if not signature_matches:
         logger.info(
-            f"Video {video_path} has changed since its metadata cache "
-            f"{cache_path} was written; re-reading metadata."
+            "Metadata cache %s: size/mtime differs from video; computing checksum to verify.",
+            cache_path,
         )
-        return None
+        if cached_checksum != _compute_file_checksum(video_path):
+            logger.info(
+                "Checksum mismatch for %s; cache is stale and metadata will be re-read.",
+                video_path,
+            )
+            return None
+        logger.info(
+            "Checksum matches for %s despite size/mtime change; updating cached signature.",
+            video_path,
+        )
+        _write_metadata_cache(
+            cache_path,
+            video_path,
+            metadata["n_frames"],
+            tuple(metadata["frame_size"]),
+            metadata["fps"],
+        )
+    else:
+        logger.info(
+            "Metadata cache %s matches video signature; using cached metadata directly.",
+            cache_path,
+        )
 
     try:
         return VideoMetadata(
@@ -581,10 +602,16 @@ def get_video_metadata(
     video_path = Path(video_path)
     cache_path = video_path.parent / (video_path.name + metadata_suffix)
 
-    if use_cached_metadata and cache_path.is_file():
-        cached = _read_metadata_cache(cache_path, video_path)
-        if cached is not None:
-            return cached
+    if use_cached_metadata:
+        if cache_path.is_file():
+            cached = _read_metadata_cache(cache_path, video_path)
+            if cached is not None:
+                return cached
+        else:
+            logger.info(
+                "No metadata cache found at %s; reading metadata from video.",
+                cache_path,
+            )
 
     n_frames = check_num_frames(video_path)
     sample_frames, fps = read_frames_from_video(video_path, frame_indices=[0])
@@ -592,5 +619,7 @@ def get_video_metadata(
 
     if cache_metadata:
         _write_metadata_cache(cache_path, video_path, n_frames, frame_size, fps)
+        logger.info("Wrote metadata cache to %s.", cache_path)
 
+    fps_str = f"{fps:g}" if fps is not None else "unknown"
     return VideoMetadata(n_frames=n_frames, frame_size=tuple(frame_size), fps=fps)

@@ -17,12 +17,25 @@ from .io import (
     get_video_metadata,
     VideoMetadata,
 )
-from .video import Video, EncodedVideo, ImageDirVideo
-from .torch_tools import (
-    VideoCollectionDataset,
-    VideoCollectionDataLoader,
-    SimpleVideoCollectionLoader,
-)
+_LAZY_IMPORTS: dict[str, str] = {
+    "Video": ".video",
+    "EncodedVideo": ".video",
+    "ImageDirVideo": ".video",
+    "VideoCollectionDataset": ".torch_tools",
+    "VideoCollectionDataLoader": ".torch_tools",
+    "SimpleVideoCollectionLoader": ".torch_tools",
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_IMPORTS:
+        import importlib
+
+        mod = importlib.import_module(_LAZY_IMPORTS[name], package=__name__)
+        value = getattr(mod, name)
+        globals()[name] = value  # cache to avoid repeated lookups
+        return value
+    raise AttributeError(f"module 'pvio' has no attribute {name!r}")
 
 __all__ = [
     "read_frames_from_video",
