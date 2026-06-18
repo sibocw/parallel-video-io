@@ -65,4 +65,3 @@ nav:
     - pvio.torch_tools: api/torch_tools.md
   - Benchmarks: benchmark.md
   - Developer Info: developer.md
-  - Benchmarks: benchmark.md

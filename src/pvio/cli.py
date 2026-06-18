@@ -17,6 +17,13 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+
 import tyro
 
 from . import _accel
@@ -123,22 +130,25 @@ def _validate_preset(preset: str | None, mode: str) -> None:
 
 
 def encode(
-    inputs: list[Path],
+    inputs: list[Path] = [],
     /,
+    *,
     output: Path,
     fps: float = 30.0,
     mode: Literal["auto", "gpu", "cpu"] = "auto",
     quality: int = _accel.DEFAULT_QUALITY,
     preset: str | None = None,
     sort: bool = True,
+    from_file: Path | None = None,
     log_interval: int | None = 100,
 ) -> None:
     """Combine image files into an H.264 MP4 video.
 
     Args:
         inputs: Image files to combine, or a single directory of images. A
-            directory is expanded to its image files; an explicit list is used
-            as given (then ordered, see ``sort``).
+            directory is expanded to its image files; an explicit list is
+            encoded in the given order (then sorted, see ``sort``). Cannot be
+            combined with ``--from-file``.
         output: Path for the output ``.mp4`` file.
         fps: Frames per second of the output video.
         mode: Encoder selection. ``auto`` uses the GPU (NVENC) when available
@@ -147,20 +157,56 @@ def encode(
         quality: Quality on the 0-51 H.264 quantiser scale (lower = higher
             quality, larger files). Applied as libx264 CRF or NVENC QP.
         preset: Encoder preset. Omit for a sensible per-encoder default
-            (libx264: ``slow``; NVENC: ``p7``). Must match the encoder ``mode``
-            selects: libx264 (``ultrafast``…``placebo``) for ``cpu``, NVENC
-            (``p1``…``p7``) for ``gpu``. A mismatch is an error for an explicit
-            ``mode`` and a warning for ``auto``.
-        sort: Order frames with a natural (numeric-aware) sort. On for a
-            directory; for an explicit list, disable to keep the given order.
-        log_interval: Log progress every N frames. Set to a non-positive value
-            to disable.
+            (libx264: ``slow``; NVENC: ``p7``). Must match the encoder that
+            ``mode`` selects:
+
+            - libx264 (CPU, ``--mode cpu``): ``ultrafast``, ``superfast``,
+              ``veryfast``, ``faster``, ``fast``, ``medium``, ``slow``,
+              ``slower``, ``veryslow``, ``placebo``. Faster presets encode
+              more quickly but compress less efficiently (larger files at the
+              same quality). Default ``slow`` is a good quality/speed balance.
+
+            - NVENC (GPU, ``--mode gpu``): ``p1`` through ``p7``. Lower
+              numbers are *faster* but produce lower quality / larger files;
+              higher numbers are *slower* but achieve better quality. Default
+              ``p7`` gives the best NVENC quality.
+
+            A preset that doesn't match the active encoder is an error for an
+            explicit ``--mode`` and a warning for ``--mode auto``.
+        sort: Order frames with a natural (numeric-aware) sort. Always applied
+            for a directory input; for an explicit list or ``--from-file``,
+            disable with ``--no-sort`` to preserve the given order.
+        from_file: Path to a plain-text file listing one image path per line.
+            Use instead of positional ``inputs`` when encoding a large number
+            of frames (avoids shell command-line length limits). Cannot be
+            combined with positional ``inputs``.
+        log_interval: Log progress every N frames (when not in an interactive
+            terminal). Set to a non-positive value to disable.
     """
+    if inputs and from_file is not None:
+        raise SystemExit("Cannot use both positional inputs and --from-file.")
+    if not inputs and from_file is None:
+        raise SystemExit(
+            "Provide image paths / a directory as positional arguments, "
+            "or a text file of paths with --from-file."
+        )
+
+    if from_file is not None:
+        if not from_file.is_file():
+            raise SystemExit(f"{from_file} does not exist or is not a file.")
+        lines = from_file.read_text().splitlines()
+        raw_paths = [Path(ln.strip()) for ln in lines if ln.strip()]
+        if not raw_paths:
+            raise SystemExit(f"No paths found in {from_file}.")
+        paths = sorted(raw_paths, key=_natural_sort_key) if sort else raw_paths
+    else:
+        paths = _collect_image_paths(inputs, sort)
+
     _validate_preset(preset, mode)
-    paths = _collect_image_paths(inputs, sort)
     output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
 
+    input_bytes = sum(p.stat().st_size for p in paths)
     logging.info("Encoding %d frame(s) into %s (mode=%s).", len(paths), output, mode)
     write_image_paths_to_video(
         output,
@@ -171,7 +217,15 @@ def encode(
         preset=preset,
         log_interval=log_interval if (log_interval and log_interval > 0) else None,
     )
-    logging.info("Wrote %s", output)
+    output_bytes = output.stat().st_size
+    ratio = input_bytes / output_bytes if output_bytes else float("inf")
+    logging.info(
+        "Wrote %s  |  compression ratio %.1f× (%s → %s)",
+        output,
+        ratio,
+        _fmt_bytes(input_bytes),
+        _fmt_bytes(output_bytes),
+    )
 
 
 def info(

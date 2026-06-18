@@ -338,6 +338,52 @@ def test_get_video_metadata_invalidates_cache_on_modification(tmp_path: Path):
     assert data["checksum"] == _compute_file_checksum(out)
 
 
+def test_get_video_metadata_cache_stores_signature(tmp_path: Path):
+    """The cache records the cheap (size, mtime_ns) staleness guard."""
+    out = tmp_path / "sig.mp4"
+    write_frames_to_video(out, make_simple_frames(n=2, h=16, w=16), fps=5.0)
+    get_video_metadata(out, cache_metadata=True, use_cached_metadata=False)
+
+    cache = out.parent / (out.name + ".metadata.json")
+    with open(cache) as f:
+        data = json.load(f)
+    st = out.stat()
+    assert data["size"] == st.st_size
+    assert data["mtime_ns"] == st.st_mtime_ns
+
+
+def test_get_video_metadata_unchanged_file_skips_checksum(tmp_path: Path, monkeypatch):
+    """An unchanged (size, mtime) cache hit must not re-hash the whole video."""
+    import pvio.io as pvio_io
+
+    out = tmp_path / "fast.mp4"
+    write_frames_to_video(out, make_simple_frames(n=3, h=16, w=16), fps=5.0)
+    get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)  # prime
+
+    def _boom(*args, **kwargs):
+        raise AssertionError("checksum should not be computed on the stat fast path")
+
+    monkeypatch.setattr(pvio_io, "_compute_file_checksum", _boom)
+    meta = get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+    assert meta.n_frames == 3
+
+
+def test_get_video_metadata_touch_preserving_bytes_is_trusted(tmp_path: Path):
+    """A touched-but-unchanged video falls back to the checksum and stays valid."""
+    import os
+
+    out = tmp_path / "touched.mp4"
+    write_frames_to_video(out, make_simple_frames(n=5, h=16, w=16), fps=5.0)
+    first = get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+
+    # Bump mtime without changing the bytes (e.g. a copy or `touch`).
+    st = out.stat()
+    os.utime(out, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+    second = get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+    assert second.n_frames == first.n_frames == 5
+
+
 def test_get_video_metadata_legacy_cache_without_checksum_reread(tmp_path: Path):
     """A cache file lacking a checksum (older format) is re-read, not trusted."""
     out = tmp_path / "legacy.mp4"

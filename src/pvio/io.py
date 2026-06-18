@@ -3,11 +3,14 @@ import hashlib
 import json
 import logging
 import os
+import sys
 import tempfile
 import contextlib
 import imageio.v2 as imageio
 from pathlib import Path
 from typing import NamedTuple
+
+from tqdm import tqdm
 
 from . import _accel
 
@@ -205,7 +208,9 @@ def write_image_paths_to_video(
         ValueError: If *image_paths* is empty, an image's dimensions differ from
             the first image's, or *mode* is not one of
             ``"auto"``/``"gpu"``/``"cpu"``.
-        FileNotFoundError: If an image path does not exist.
+
+    A missing or unreadable image path surfaces whatever error imageio raises
+    while reading it (typically :class:`FileNotFoundError`).
     """
     if mode not in ("auto", "gpu", "cpu"):
         raise ValueError(f"mode must be 'auto', 'gpu', or 'cpu', got {mode!r}.")
@@ -329,6 +334,11 @@ def _encode_with_fallback(
     last_error: Exception | None = None
     for attempt_idx, (attempt_codec, attempt_params, ffmpeg_exe) in enumerate(attempts):
         is_last = attempt_idx == len(attempts) - 1
+        logger.info(
+            "Encoder: %s | params: %s",
+            attempt_codec,
+            " ".join(attempt_params),
+        )
         try:
             with _imageio_ffmpeg_exe(ffmpeg_exe):
                 _encode_frames(
@@ -370,6 +380,7 @@ def _encode_frames(
     *frames* is any iterable of uint8 ``(H, W, C)`` arrays; *n_frames* is its
     length, used only for progress logging.
     """
+    use_tqdm = sys.stdout.isatty()
     with imageio.get_writer(
         str(video_path),
         "ffmpeg",
@@ -378,10 +389,15 @@ def _encode_frames(
         quality=None,  # Use CRF/QP (in ffmpeg_params) instead of quality
         ffmpeg_params=ffmpeg_params,
     ) as video_writer:
-        for i, frame in enumerate(frames):
+        frame_iter = (
+            tqdm(frames, total=n_frames, unit="frame", dynamic_ncols=True)
+            if use_tqdm
+            else frames
+        )
+        for i, frame in enumerate(frame_iter):
             video_writer.append_data(frame)
 
-            if log_interval is not None and (i + 1) % log_interval == 0:
+            if log_interval is not None and not use_tqdm and (i + 1) % log_interval == 0:
                 logger.info(f"Written frame {i + 1}/{n_frames}")
 
 
@@ -409,9 +425,10 @@ def _compute_file_checksum(path: Path | str, *, chunk_size: int = 1 << 20) -> st
     """Return a hex checksum of *path*'s contents.
 
     Uses BLAKE2b, reading the file in *chunk_size*-byte chunks so memory stays
-    bounded regardless of file size. Reading the raw bytes is far cheaper than
-    decoding the video (which is what a metadata cache miss costs), so this is
-    affordable to compute on every cache lookup as an integrity guard.
+    bounded regardless of file size. This is the authoritative staleness check,
+    but reading every byte of a large video is not free, so the cache first uses
+    a cheap ``(size, mtime)`` guard (see :func:`_file_signature`) and only falls
+    back to hashing when that guard does not match.
     """
     hasher = hashlib.blake2b()
     with open(path, "rb") as f:
@@ -420,16 +437,29 @@ def _compute_file_checksum(path: Path | str, *, chunk_size: int = 1 << 20) -> st
     return hasher.hexdigest()
 
 
-def _read_metadata_cache(
-    cache_path: Path, video_path: Path
-) -> VideoMetadata | None:
+def _file_signature(path: Path | str) -> tuple[int, int]:
+    """Return a cheap ``(size_bytes, mtime_ns)`` fingerprint of *path*.
+
+    Used as a fast first-pass staleness guard: if a file's size and modification
+    time are unchanged since the cache was written, its contents are almost
+    certainly unchanged and the (expensive) content checksum can be skipped.
+    """
+    st = os.stat(path)
+    return st.st_size, st.st_mtime_ns
+
+
+def _read_metadata_cache(cache_path: Path, video_path: Path) -> VideoMetadata | None:
     """Load and validate the sidecar metadata cache.
 
-    Returns the cached :class:`VideoMetadata` when the cache is present and its
-    stored checksum matches the video's current contents. Returns ``None`` to
-    signal that the cache cannot be trusted and the metadata must be re-read —
-    either because the cache predates checksums or because the video has since
-    been modified.
+    Returns the cached :class:`VideoMetadata` when the cache is present and still
+    matches the video, and ``None`` to signal that the cache cannot be trusted
+    and the metadata must be re-read (because the cache predates checksums or the
+    video has since been modified).
+
+    Validation is two-tier to keep the hot path cheap: the cached ``(size,
+    mtime)`` signature is checked first, and the full content checksum is
+    computed only when that cheap guard does not match (e.g. the file was
+    touched/copied), so an unchanged video is trusted without re-hashing it.
 
     Raises if the cache file exists but is structurally corrupt (unparseable
     JSON or a checksum-validated payload missing required fields).
@@ -448,7 +478,15 @@ def _read_metadata_cache(
             f"older version); re-reading metadata from the video."
         )
         return None
-    if cached_checksum != _compute_file_checksum(video_path):
+
+    size, mtime_ns = _file_signature(video_path)
+    signature_matches = (
+        metadata.get("size") == size and metadata.get("mtime_ns") == mtime_ns
+    )
+    # Cheap guard failed (or is absent): fall back to the authoritative checksum
+    # before declaring the cache stale, so a mere touch/copy doesn't force a full
+    # metadata re-read when the bytes are actually unchanged.
+    if not signature_matches and cached_checksum != _compute_file_checksum(video_path):
         logger.info(
             f"Video {video_path} has changed since its metadata cache "
             f"{cache_path} was written; re-reading metadata."
@@ -473,11 +511,19 @@ def _write_metadata_cache(
     frame_size: tuple[int, int],
     fps: float | None,
 ) -> None:
-    """Atomically write the sidecar metadata cache, including the file checksum."""
+    """Atomically write the sidecar metadata cache.
+
+    Stores both the cheap ``(size, mtime_ns)`` signature and the authoritative
+    content checksum so :func:`_read_metadata_cache` can validate cheaply first
+    and only hash when the signature drifts.
+    """
+    size, mtime_ns = _file_signature(video_path)
     metadata = {
         "n_frames": n_frames,
         "frame_size": list(frame_size),
         "fps": fps,
+        "size": size,
+        "mtime_ns": mtime_ns,
         "checksum": _compute_file_checksum(video_path),
     }
     with tempfile.NamedTemporaryFile(

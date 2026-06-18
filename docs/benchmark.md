@@ -27,6 +27,6 @@ for full methodology, metric definitions, and backend notes.
 
 
 
-<!-- Detailed results: improt from MD file -->
+<!-- Detailed results: import directly from Markdown file -->
 
 --8<-- "benchmark/results/SUMMARY.md"

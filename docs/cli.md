@@ -14,8 +14,8 @@ Combine a directory (or an explicit list) of image files into an H.264 MP4. GPU
 # Encode every image in a directory (natural-sorted: frame2 before frame10)
 pvio encode frames/ --output out.mp4 --fps 30
 
-# Encode an explicit, already-ordered list of files
-pvio encode a.png b.png c.png --output out.mp4 --no-sort
+# Encode an explicit, already-ordered list of files from a text file
+pvio encode --from-file frame_paths.txt --output out.mp4 --no-sort
 
 # Force the CPU encoder at a near-lossless quality
 pvio encode frames/ --output out.mp4 --mode cpu --quality 18 --preset slow
@@ -34,14 +34,17 @@ Key options:
 | `--quality` | 0–51 H.264 quantiser scale, lower = higher quality (default: 20). |
 | `--preset` | Encoder preset — see the note below. |
 | `--sort` / `--no-sort` | Natural numeric-aware ordering (on by default). |
+| `--from-file` | Text file with one image path per line (alternative to a directory). |
 
 !!! warning "Presets are encoder-specific"
     `--preset` must match the encoder that `--mode` selects: **libx264**
-    (`ultrafast`…`placebo`, e.g. `slow`/`medium`) for `cpu`, and **NVENC**
-    (`p1`…`p7`) for `gpu`. With an explicit `--mode`, a mismatched preset is a hard
-    error; with `--mode auto`, the encoder is resolved best-effort and a mismatch is
-    only a warning, since the real choice happens at encode time. Omit `--preset` to
-    use a sensible per-encoder default (libx264 `slow`, NVENC `p7`).
+    (`ultrafast`…`placebo`) for `cpu`, and **NVENC** (`p1`…`p7`) for `gpu`.
+    For libx264, faster presets encode more quickly but compress less efficiently.
+    For NVENC, **lower numbers are faster but lower quality** (`p1` = fastest,
+    `p7` = slowest / best quality). With an explicit `--mode`, a mismatched preset
+    is a hard error; with `--mode auto`, the encoder is resolved best-effort and a
+    mismatch is only a warning. Omit `--preset` to use a sensible per-encoder
+    default (libx264 `slow`, NVENC `p7`).
 
 ## `pvio info` — inspect a video
 
