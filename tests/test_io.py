@@ -3,16 +3,31 @@
 import pytest
 import numpy as np
 import json
+import imageio.v2 as imageio
 from pathlib import Path
 
 from pvio.io import (
     write_frames_to_video,
+    write_image_paths_to_video,
     read_frames_from_video,
     get_video_metadata,
     check_num_frames,
+    _compute_file_checksum,
 )
 
 from .test_utils import make_simple_frames
+
+
+def _write_frame_images(
+    dir_path: Path, frames: list[np.ndarray], ext: str = "png"
+) -> list[Path]:
+    """Write *frames* to ``dir_path`` as numbered images and return their paths."""
+    paths = []
+    for i, frame in enumerate(frames):
+        p = dir_path / f"frame{i:04d}.{ext}"
+        imageio.imwrite(p, frame)
+        paths.append(p)
+    return paths
 
 
 def test_write_and_read_dummy_video(tmp_path: Path):
@@ -52,9 +67,15 @@ def test_get_video_metadata_uses_cache(tmp_path: Path):
     out = tmp_path / "cache.mp4"
     write_frames_to_video(out, frames, fps=5.0)
 
-    # Write fake metadata at the correct cache path (name + suffix, not replacing suffix)
+    # Write fake metadata at the correct cache path (name + suffix, not replacing
+    # suffix). A matching checksum makes the cache trusted, so the fake values are used.
     meta_file = out.parent / (out.name + ".metadata.json")
-    fake_meta = {"n_frames": 123, "frame_size": [32, 32], "fps": 12.0}
+    fake_meta = {
+        "n_frames": 123,
+        "frame_size": [32, 32],
+        "fps": 12.0,
+        "checksum": _compute_file_checksum(out),
+    }
     with open(meta_file, "w") as f:
         json.dump(fake_meta, f)
 
@@ -228,6 +249,58 @@ def test_check_num_frames_matches_metadata(tmp_path: Path):
     )
 
 
+def test_write_image_paths_and_read_back(tmp_path: Path):
+    """write_image_paths_to_video combines on-disk images into a video."""
+    frames = make_simple_frames(n=6, h=32, w=32, channels=3)
+    img_dir = tmp_path / "frames"
+    img_dir.mkdir()
+    paths = _write_frame_images(img_dir, frames)
+
+    out = tmp_path / "from_paths.mp4"
+    write_image_paths_to_video(out, paths, fps=10.0)
+    assert out.is_file() and out.stat().st_size > 0
+
+    meta = get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)
+    assert meta.n_frames == 6
+    assert meta.frame_size == (32, 32)
+
+
+def test_write_image_paths_accepts_str_paths(tmp_path: Path):
+    """String (not just Path) image paths are accepted."""
+    frames = make_simple_frames(n=3, h=16, w=16)
+    img_dir = tmp_path / "frames"
+    img_dir.mkdir()
+    paths = [str(p) for p in _write_frame_images(img_dir, frames)]
+
+    out = tmp_path / "str_paths.mp4"
+    write_image_paths_to_video(out, paths, fps=5.0, mode="cpu")
+    assert out.is_file()
+
+
+def test_write_image_paths_empty_raises(tmp_path: Path):
+    """An empty image path list raises."""
+    with pytest.raises(ValueError):
+        write_image_paths_to_video(tmp_path / "x.mp4", [], fps=10.0)
+
+
+def test_write_image_paths_invalid_mode_raises(tmp_path: Path):
+    """An unknown mode is rejected before any image is read."""
+    with pytest.raises(ValueError):
+        write_image_paths_to_video(tmp_path / "x.mp4", ["a.png"], fps=10.0, mode="tpu")
+
+
+def test_write_image_paths_mismatched_sizes_raises(tmp_path: Path):
+    """Images with differing dimensions raise a ValueError."""
+    img_dir = tmp_path / "frames"
+    img_dir.mkdir()
+    imageio.imwrite(img_dir / "frame0000.png", np.zeros((16, 16, 3), dtype=np.uint8))
+    imageio.imwrite(img_dir / "frame0001.png", np.zeros((20, 20, 3), dtype=np.uint8))
+    paths = [img_dir / "frame0000.png", img_dir / "frame0001.png"]
+
+    with pytest.raises(ValueError):
+        write_image_paths_to_video(tmp_path / "bad.mp4", paths, fps=5.0)
+
+
 def test_get_video_metadata_cache_written(tmp_path: Path):
     """cache_metadata=True writes a parseable JSON cache file."""
     frames = make_simple_frames(n=2, h=16, w=16)
@@ -240,3 +313,44 @@ def test_get_video_metadata_cache_written(tmp_path: Path):
     with open(cache) as f:
         data = json.load(f)
     assert "n_frames" in data and "frame_size" in data and "fps" in data
+    assert data["checksum"] == _compute_file_checksum(out)
+
+
+def test_get_video_metadata_invalidates_cache_on_modification(tmp_path: Path):
+    """A changed video checksum invalidates the cache and forces a re-read."""
+    out = tmp_path / "modified.mp4"
+    write_frames_to_video(out, make_simple_frames(n=3, h=16, w=16), fps=5.0)
+
+    # Prime the cache, then overwrite the video with a different number of frames.
+    first = get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+    assert first.n_frames == 3
+    write_frames_to_video(out, make_simple_frames(n=7, h=16, w=16), fps=5.0)
+
+    # The stale cache must be invalidated and the new frame count returned.
+    second = get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+    assert second.n_frames == 7
+
+    # The cache file must have been rewritten with the new video's checksum.
+    cache = out.parent / (out.name + ".metadata.json")
+    with open(cache) as f:
+        data = json.load(f)
+    assert data["n_frames"] == 7
+    assert data["checksum"] == _compute_file_checksum(out)
+
+
+def test_get_video_metadata_legacy_cache_without_checksum_reread(tmp_path: Path):
+    """A cache file lacking a checksum (older format) is re-read, not trusted."""
+    out = tmp_path / "legacy.mp4"
+    write_frames_to_video(out, make_simple_frames(n=4, h=16, w=16), fps=5.0)
+
+    cache = out.parent / (out.name + ".metadata.json")
+    with open(cache, "w") as f:
+        json.dump({"n_frames": 999, "frame_size": [16, 16], "fps": 5.0}, f)
+
+    meta = get_video_metadata(out, cache_metadata=True, use_cached_metadata=True)
+    assert meta.n_frames == 4
+
+    # The cache is upgraded in place to include a checksum.
+    with open(cache) as f:
+        data = json.load(f)
+    assert data["checksum"] == _compute_file_checksum(out)

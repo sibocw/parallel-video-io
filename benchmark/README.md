@@ -21,13 +21,16 @@ uv sync --extra benchmark
 ```
 
 This pulls in PyAV, OpenCV, [eva-decord](https://pypi.org/project/eva-decord/),
-NVIDIA DALI, TorchCodec, scikit-image, pandas, and plotly via the `benchmark`
-optional-dependency group in [`pyproject.toml`](../pyproject.toml). FFmpeg must
-be on `PATH`.
+scikit-image, pandas, and plotly via the `benchmark` optional-dependency group
+in [`pyproject.toml`](../pyproject.toml). TorchCodec is already a core PVIO
+dependency. FFmpeg must be on `PATH`.
 
 GPU backends (PVIO GPU, TorchCodec CUDA, DALI) require an NVIDIA GPU with CUDA
 and the matching NVENC/NVDEC drivers. They are automatically skipped when no GPU
-is available.
+is available. **NVIDIA DALI** is GPU-only and ships from NVIDIA's own package
+index, so it is not part of the `benchmark` extra; install it separately (e.g.
+`pip install nvidia-dali-cuda120`) to include the DALI sequential-decode
+backend.
 
 ## Running the benchmark
 
@@ -130,6 +133,18 @@ All knobs can be overridden via environment variables:
   quality is swept and its throughput/compression are interpolated to a common
   **PSNR** (`MATCH_PSNR`, default auto), so all encoders are read at equal image
   quality.
+- **Preset is held fixed, not swept.** `write_frames_to_video` exposes *two*
+  encode knobs — `quality` (CRF/QP) and `preset` (the encoder's
+  speed-vs-compression effort level, e.g. libx264 `ultrafast`…`placebo` or NVENC
+  `p1`…`p7`). The benchmark sweeps only `quality`; `preset` is pinned to each
+  encoder's default (`slow` for libx264, `p7` for NVENC) and the PyAV libx264
+  baseline is pinned to the matching `slow`. This is deliberate: the goal is a
+  single speed-vs-compression frontier per encoder compared at matched PSNR, so
+  preset is held constant across the CPU encoders to isolate codec/encoder
+  efficiency rather than confound it with a second free variable. Preset remains
+  a real tuning axis in the library API (`write_frames_to_video(..., preset=)`)
+  — it is simply not part of this comparison. To re-run the whole suite at a
+  different effort level, change the pinned preset in `backends/encode.py`.
 - **Seek correctness** is verified *exactly*: each synthetic frame carries a
   binary barcode of its index (macroblock-sized black/white blocks that survive
   H.264 intact). After a random read, the index is decoded from the pixels and

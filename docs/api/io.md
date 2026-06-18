@@ -7,5 +7,6 @@ Low-level functions for reading and writing video files using imageio/FFmpeg.
       members:
         - read_frames_from_video
         - write_frames_to_video
+        - write_image_paths_to_video
         - check_num_frames
         - get_video_metadata

@@ -1,4 +1,5 @@
 import numpy as np
+import hashlib
 import json
 import logging
 import os
@@ -143,6 +144,149 @@ def write_frames_to_video(
                 f"{frame_size}, but at least one frame has size {frame.shape[:2]}."
             )
     height, width = frame_size[0], frame_size[1]
+
+    _encode_with_fallback(
+        video_path,
+        frames,
+        len(frames),
+        height,
+        width,
+        fps,
+        mode=mode,
+        quality=quality,
+        preset=preset,
+        extra_ffmpeg_params=extra_ffmpeg_params,
+        log_interval=log_interval,
+    )
+
+
+def write_image_paths_to_video(
+    video_path: Path | str,
+    image_paths: list[Path | str],
+    fps: float,
+    *,
+    mode: str = "auto",
+    quality: int = _accel.DEFAULT_QUALITY,
+    preset: str | None = None,
+    extra_ffmpeg_params: list[str] | None = None,
+    log_interval: int | None = None,
+) -> None:
+    """Combine on-disk image files into an H.264 MP4 file.
+
+    Like :func:`write_frames_to_video`, but the frames are given as paths to
+    image files (PNG, JPEG, TIFF, …) instead of in-memory numpy arrays. Images
+    are read lazily, one at a time, so an arbitrarily long sequence can be
+    encoded without holding every frame in memory at once. The encoder selection,
+    quality semantics, and NVENC→libx264 fallback are identical to
+    :func:`write_frames_to_video`.
+
+    Frames are encoded in the order given by *image_paths*; sort the paths
+    beforehand if a particular ordering is required. The first image's spatial
+    dimensions define the output size, and every subsequent image must match it.
+
+    Args:
+        video_path: Path for the output video file.
+        image_paths: Paths to the image files to combine, in output order. Each
+            file is read with imageio and must decode to an ``(H, W, C)`` array;
+            all images must share the same spatial dimensions.
+        fps: Frames per second of the output video.
+        mode: Encoder selection — ``"auto"`` (default), ``"gpu"``, or ``"cpu"``.
+            See :func:`write_frames_to_video` for details.
+        quality: Encode quality on the 0-51 H.264 quantiser scale (lower = higher
+            quality, larger files). See :func:`write_frames_to_video`.
+        preset: Encoder preset. ``None`` uses a sensible per-encoder default. See
+            :func:`write_frames_to_video`.
+        extra_ffmpeg_params: Optional raw FFmpeg parameters appended after the
+            quality/preset flags.
+        log_interval: If set, log progress every *log_interval* frames at
+            ``INFO`` level.
+
+    Raises:
+        ValueError: If *image_paths* is empty, an image's dimensions differ from
+            the first image's, or *mode* is not one of
+            ``"auto"``/``"gpu"``/``"cpu"``.
+        FileNotFoundError: If an image path does not exist.
+    """
+    if mode not in ("auto", "gpu", "cpu"):
+        raise ValueError(f"mode must be 'auto', 'gpu', or 'cpu', got {mode!r}.")
+
+    paths = [Path(p) for p in image_paths]
+    if len(paths) == 0:
+        raise ValueError("No image paths provided to write_image_paths_to_video")
+
+    # Read the first image to determine the output frame size. The remaining
+    # images are validated lazily as they are read during encoding.
+    first_frame = imageio.imread(paths[0])
+    frame_size = first_frame.shape[:2]
+    height, width = frame_size[0], frame_size[1]
+
+    frames = _ImagePathFrames(paths, frame_size)
+    _encode_with_fallback(
+        video_path,
+        frames,
+        len(paths),
+        height,
+        width,
+        fps,
+        mode=mode,
+        quality=quality,
+        preset=preset,
+        extra_ffmpeg_params=extra_ffmpeg_params,
+        log_interval=log_interval,
+    )
+
+
+class _ImagePathFrames:
+    """A re-iterable view over image files that decodes one frame at a time.
+
+    Reading lazily keeps memory bounded regardless of how many frames are being
+    combined. The view is re-iterable (a fresh generator per ``__iter__``) so the
+    encoder's NVENC→libx264 fallback can restart the encode by re-reading from
+    disk. Each frame's spatial dimensions are checked against *frame_size* as it
+    is read, raising :class:`ValueError` on a mismatch.
+    """
+
+    def __init__(self, image_paths: list[Path], frame_size: tuple[int, int]):
+        self._image_paths = image_paths
+        self._frame_size = frame_size
+
+    def __len__(self) -> int:
+        return len(self._image_paths)
+
+    def __iter__(self):
+        for img_path in self._image_paths:
+            frame = imageio.imread(img_path)
+            if frame.shape[:2] != self._frame_size:
+                raise ValueError(
+                    "All frames must have the same dimensions. The first image "
+                    f"has size {self._frame_size}, but {img_path} has size "
+                    f"{frame.shape[:2]}."
+                )
+            yield frame
+
+
+def _encode_with_fallback(
+    video_path: Path | str,
+    frames,
+    n_frames: int,
+    height: int,
+    width: int,
+    fps: float,
+    *,
+    mode: str,
+    quality: int,
+    preset: str | None,
+    extra_ffmpeg_params: list[str] | None,
+    log_interval: int | None,
+) -> None:
+    """Encode *frames* with the NVENC→libx264 attempt/fallback strategy.
+
+    Shared by :func:`write_frames_to_video` and
+    :func:`write_image_paths_to_video`. *frames* is any re-iterable yielding
+    uint8 ``(H, W, C)`` arrays (a list, or a lazy view such as
+    :class:`_ImagePathFrames`); it may be iterated more than once when a GPU
+    encode fails and the libx264 fallback restarts.
+    """
     extra = list(extra_ffmpeg_params or [])
 
     # Decide whether to attempt NVENC. "auto" detects a usable GPU; "gpu" forces
@@ -188,7 +332,13 @@ def write_frames_to_video(
         try:
             with _imageio_ffmpeg_exe(ffmpeg_exe):
                 _encode_frames(
-                    video_path, frames, fps, attempt_codec, attempt_params, log_interval
+                    video_path,
+                    frames,
+                    n_frames,
+                    fps,
+                    attempt_codec,
+                    attempt_params,
+                    log_interval,
                 )
             return
         except Exception as e:
@@ -208,13 +358,18 @@ def write_frames_to_video(
 
 def _encode_frames(
     video_path: Path | str,
-    frames: list[np.ndarray],
+    frames,
+    n_frames: int,
     fps: float,
     codec: str,
     ffmpeg_params: list[str],
     log_interval: int | None,
 ) -> None:
-    """Encode *frames* to *video_path* with imageio's FFmpeg backend."""
+    """Encode *frames* to *video_path* with imageio's FFmpeg backend.
+
+    *frames* is any iterable of uint8 ``(H, W, C)`` arrays; *n_frames* is its
+    length, used only for progress logging.
+    """
     with imageio.get_writer(
         str(video_path),
         "ffmpeg",
@@ -227,7 +382,7 @@ def _encode_frames(
             video_writer.append_data(frame)
 
             if log_interval is not None and (i + 1) % log_interval == 0:
-                logger.info(f"Written frame {i + 1}/{len(frames)}")
+                logger.info(f"Written frame {i + 1}/{n_frames}")
 
 
 def check_num_frames(video_path: Path | str) -> int:
@@ -250,6 +405,89 @@ def check_num_frames(video_path: Path | str) -> int:
     return num_frames
 
 
+def _compute_file_checksum(path: Path | str, *, chunk_size: int = 1 << 20) -> str:
+    """Return a hex checksum of *path*'s contents.
+
+    Uses BLAKE2b, reading the file in *chunk_size*-byte chunks so memory stays
+    bounded regardless of file size. Reading the raw bytes is far cheaper than
+    decoding the video (which is what a metadata cache miss costs), so this is
+    affordable to compute on every cache lookup as an integrity guard.
+    """
+    hasher = hashlib.blake2b()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(chunk_size), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
+def _read_metadata_cache(
+    cache_path: Path, video_path: Path
+) -> VideoMetadata | None:
+    """Load and validate the sidecar metadata cache.
+
+    Returns the cached :class:`VideoMetadata` when the cache is present and its
+    stored checksum matches the video's current contents. Returns ``None`` to
+    signal that the cache cannot be trusted and the metadata must be re-read —
+    either because the cache predates checksums or because the video has since
+    been modified.
+
+    Raises if the cache file exists but is structurally corrupt (unparseable
+    JSON or a checksum-validated payload missing required fields).
+    """
+    try:
+        with open(cache_path, "r") as f:
+            metadata = json.load(f)
+    except Exception as e:
+        logger.critical(f"Corrupted metadata cache file {cache_path}: {e}")
+        raise
+
+    cached_checksum = metadata.get("checksum")
+    if cached_checksum is None:
+        logger.info(
+            f"Metadata cache {cache_path} has no checksum (likely written by an "
+            f"older version); re-reading metadata from the video."
+        )
+        return None
+    if cached_checksum != _compute_file_checksum(video_path):
+        logger.info(
+            f"Video {video_path} has changed since its metadata cache "
+            f"{cache_path} was written; re-reading metadata."
+        )
+        return None
+
+    try:
+        return VideoMetadata(
+            n_frames=metadata["n_frames"],
+            frame_size=tuple(metadata["frame_size"]),
+            fps=metadata["fps"],
+        )
+    except Exception as e:
+        logger.critical(f"Corrupted metadata cache file {cache_path}: {e}")
+        raise
+
+
+def _write_metadata_cache(
+    cache_path: Path,
+    video_path: Path,
+    n_frames: int,
+    frame_size: tuple[int, int],
+    fps: float | None,
+) -> None:
+    """Atomically write the sidecar metadata cache, including the file checksum."""
+    metadata = {
+        "n_frames": n_frames,
+        "frame_size": list(frame_size),
+        "fps": fps,
+        "checksum": _compute_file_checksum(video_path),
+    }
+    with tempfile.NamedTemporaryFile(
+        mode="w", dir=cache_path.parent, suffix=".tmp", delete=False
+    ) as tmp_f:
+        tmp_path = tmp_f.name
+        json.dump(metadata, tmp_f, indent=2)
+    os.replace(tmp_path, cache_path)
+
+
 def get_video_metadata(
     video_path: Path | str,
     cache_metadata: bool = True,
@@ -259,13 +497,17 @@ def get_video_metadata(
     """Return frame count, frame size, and FPS for a video file.
 
     Results are cached to a sidecar JSON file alongside the video to avoid
-    re-reading on subsequent calls.
+    re-reading on subsequent calls. The cache stores a checksum of the video's
+    contents and is automatically invalidated (the metadata is re-read and the
+    cache rewritten) whenever the video has been modified, so using the cache is
+    always safe.
 
     Args:
         video_path: Path to the video file.
         cache_metadata: Write metadata to a cache file after reading.
-        use_cached_metadata: Return cached metadata if the sidecar file
-            exists. Set to ``False`` to force a fresh read.
+        use_cached_metadata: Return cached metadata when the sidecar file exists
+            and its checksum still matches the video. Set to ``False`` to force a
+            fresh read regardless of the cache.
         metadata_suffix: Suffix appended to the video filename to form the
             cache path. Default: ``".metadata.json"``.
 
@@ -276,33 +518,17 @@ def get_video_metadata(
     """
     video_path = Path(video_path)
     cache_path = video_path.parent / (video_path.name + metadata_suffix)
-    metadata = {}
-    if use_cached_metadata and cache_path.is_file():
-        try:
-            with open(cache_path, "r") as f:
-                metadata = json.load(f)
-            n_frames = metadata["n_frames"]
-            frame_size = tuple(metadata["frame_size"])
-            fps = metadata["fps"]
-        except Exception as e:
-            logger.critical(f"Corrupted metadata cache file {cache_path}: {e}")
-            raise
-    else:
-        n_frames = check_num_frames(video_path)
-        sample_frames, fps = read_frames_from_video(video_path, frame_indices=[0])
-        frame_size = sample_frames[0].shape[:2]
 
-        if cache_metadata:
-            metadata = {
-                "n_frames": n_frames,
-                "frame_size": list(frame_size),
-                "fps": fps,
-            }
-            with tempfile.NamedTemporaryFile(
-                mode="w", dir=cache_path.parent, suffix=".tmp", delete=False
-            ) as tmp_f:
-                tmp_path = tmp_f.name
-                json.dump(metadata, tmp_f, indent=2)
-            os.replace(tmp_path, cache_path)
+    if use_cached_metadata and cache_path.is_file():
+        cached = _read_metadata_cache(cache_path, video_path)
+        if cached is not None:
+            return cached
+
+    n_frames = check_num_frames(video_path)
+    sample_frames, fps = read_frames_from_video(video_path, frame_indices=[0])
+    frame_size = sample_frames[0].shape[:2]
+
+    if cache_metadata:
+        _write_metadata_cache(cache_path, video_path, n_frames, frame_size, fps)
 
     return VideoMetadata(n_frames=n_frames, frame_size=tuple(frame_size), fps=fps)
