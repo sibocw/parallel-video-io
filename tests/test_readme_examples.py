@@ -1,4 +1,7 @@
-"""Tests that verify all examples from README.md work correctly."""
+# ruff: noqa
+# fmt: off
+
+"""Tests that verify all examples from docs/examples.md work correctly."""
 
 import numpy as np
 import torch
@@ -10,6 +13,7 @@ from pvio.io import (
     check_num_frames,
     read_frames_from_video,
     write_frames_to_video,
+    write_image_paths_to_video,
 )
 from pvio.video import EncodedVideo, ImageDirVideo
 from pvio.torch_tools import (
@@ -28,14 +32,14 @@ def test_readme_example_reading_video_metadata(tmp_path: Path):
     frames = make_frames_with_stride(30, stride=10)
     write_frames_to_video(example_video, frames, fps=10.0)
 
-    # Example from README:
-    # To get the number of frames in a video
+    # Example from docs/examples.md:
+    # Number of frames in a video
     n_frames = check_num_frames(example_video)
     print(n_frames)  # integer
 
-    # To get more information
+    # Full metadata
     meta = get_video_metadata(example_video)
-    print(meta)  # VideoMetadata(n_frames=..., frame_size=(h, w), fps=...)
+    print(meta.n_frames, meta.frame_size, meta.fps)  # VideoMetadata named tuple
 
     # Verify the example works
     assert isinstance(n_frames, int)
@@ -52,11 +56,11 @@ def test_readme_example_reading_video_frames(tmp_path: Path):
     test_frames = make_frames_with_stride(10, stride=10)
     write_frames_to_video(example_video, test_frames, fps=10.0)
 
-    # Example from README:
-    # You can read a whole video
+    # Example from docs/examples.md:
+    # Read all frames
     frames, fps = read_frames_from_video(example_video)
 
-    # ... or just some frames
+    # ... or just specific frames
     frames, fps = read_frames_from_video(example_video, frame_indices=[0, 5])
 
     # Verify the examples work
@@ -66,23 +70,59 @@ def test_readme_example_reading_video_frames(tmp_path: Path):
 
 
 def test_readme_example_writing_video(tmp_path: Path):
-    """Test the 'Writing a video' example from README."""
-    # Example from README:
+    """Test the 'Writing a video' example from docs/examples.md."""
+    # Example from docs/examples.md:
     # Create dummy 32x32 RGB frames (H, W, C)
     frames = [np.full((32, 32, 3), fill_value=i, dtype=np.uint8) for i in range(10)]
 
-    # Save them to file
     example_video = tmp_path / "example.mp4"
     write_frames_to_video(example_video, frames, fps=25.0)
 
-    # Verify the example works
     assert example_video.exists()
-    n_frames = check_num_frames(example_video)
-    assert n_frames == 10
+    assert check_num_frames(example_video) == 10
+
+    # Override encoding quality (quality=18 for near-lossless output)
+    example_hq = tmp_path / "example_hq.mp4"
+    write_frames_to_video(example_hq, frames, fps=25.0, quality=18)
+
+    assert example_hq.exists()
+    assert check_num_frames(example_hq) == 10
+
+    # Force the CPU encoder with a preset and raw FFmpeg flags
+    example_cpu = tmp_path / "example_cpu.mp4"
+    write_frames_to_video(
+        example_cpu,
+        frames,
+        fps=25.0,
+        mode="cpu",
+        preset="slow",
+        extra_ffmpeg_params=["-level", "4.0"],
+    )
+
+    assert example_cpu.exists()
+    assert check_num_frames(example_cpu) == 10
+
+
+def test_readme_example_write_image_paths_to_video(tmp_path: Path):
+    """Test the 'Combining image files into a video' example from docs/examples.md."""
+    frames_dir = tmp_path / "frames_dir"
+    frames_dir.mkdir()
+    for i in range(10):
+        img = np.full((32, 32, 3), fill_value=i * 10, dtype=np.uint8)
+        imageio.imwrite(frames_dir / f"frame{i:03d}.png", img)
+
+    # Example from docs/examples.md:
+    # Frames are encoded in the order given — sort the paths if order matters.
+    image_paths = sorted(frames_dir.glob("frame*.png"))
+    example_video = tmp_path / "example.mp4"
+    write_image_paths_to_video(example_video, image_paths, fps=25.0)
+
+    assert example_video.exists()
+    assert check_num_frames(example_video) == 10
 
 
 def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
-    """Test the 'Using the PyTorch dataset and dataloader' example from README."""
+    """Test the 'Using the PyTorch dataset and dataloader' example from docs/examples.md."""
     # Create test data
     video1_path = tmp_path / "video1.mp4"
     video2_path = tmp_path / "video2.mp4"
@@ -102,39 +142,35 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
         img = np.full((32, 32, 3), fill_value=i * 10, dtype=np.uint8)
         imageio.imwrite(frames_dir2 / f"frame_{i:03d}.png", img)
 
-    # Example from README:
-    # Create Video objects for video files
+    # Example from docs/examples.md:
+    # From video files
     video1 = EncodedVideo(video1_path)
     video2 = EncodedVideo(video2_path)
     ds = VideoCollectionDataset([video1, video2])
 
-    # ... or from directories containing individual frames as images
+    # ... or from image-frame directories
     video3 = ImageDirVideo(frames_dir1)
     video4 = ImageDirVideo(frames_dir2, frame_id_regex=r"frame\D*(\d+)(?!\d)")
     ds = VideoCollectionDataset([video3, video4])
 
-    # You can optionally provide a transform function
+    # Apply a transform to each frame after loading
     def my_transform(frame):
-        return frame * 2.0  # example: double pixel values
+        return frame * 2.0
 
     ds = VideoCollectionDataset([video1, video2], transform=my_transform)
 
-    # You can set a buffer_size parameter when creating EncodedVideo objects.
+    # Larger buffer_size = faster decoding at the cost of memory (default: 64)
     video_with_buffer = EncodedVideo(video1_path, buffer_size=128)
     ds = VideoCollectionDataset([video_with_buffer])
 
-    # Wrap dataset in a DataLoader
-    loader = VideoCollectionDataLoader(
-        ds, batch_size=8, num_workers=0
-    )  # Use 0 workers for testing
+    # Wrap in a DataLoader — other DataLoader kwargs are forwarded as usual
+    loader = VideoCollectionDataLoader(ds, batch_size=8, num_workers=0)
 
-    # Now you can iterate over the entire dataset in batches through a single iterator
     for batch in loader:
-        frames = batch["frames"]  # torch.Tensor: B x C x H x W
-        video_indices = batch["video_indices"]  # list of int (video indices)
-        frame_indices = batch["frame_indices"]  # list of int
+        frames = batch["frames"]           # torch.Tensor: (B, C, H, W)
+        video_indices = batch["video_indices"]  # list[int] — index into the videos list
+        frame_indices = batch["frame_indices"]  # list[int] — virtual frame index
 
-        # Verify the batch structure matches README documentation
         assert isinstance(frames, torch.Tensor)
         assert frames.ndim == 4  # B x C x H x W
         assert isinstance(video_indices, list)
@@ -143,7 +179,7 @@ def test_readme_example_pytorch_dataset_dataloader(tmp_path: Path):
 
 
 def test_readme_example_simple_video_collection_loader(tmp_path: Path):
-    """Test the 'Using the SimpleVideoCollectionLoader' example from README."""
+    """Test the 'Using SimpleVideoCollectionLoader' example from docs/examples.md."""
     # Create test data
     video1_path = tmp_path / "video1.mp4"
     video2_path = tmp_path / "video2.mp4"
@@ -160,27 +196,24 @@ def test_readme_example_simple_video_collection_loader(tmp_path: Path):
     def my_transform(frame):
         return frame * 2.0  # example: double pixel values
 
-    # Example from README:
-    # Video specification can be mixed: path to real videos, path to directories of images,
-    # and pre-created Video objects are all allowed.
+    # Example from docs/examples.md:
+    # Mix paths to video files, image directories, and pre-built Video objects freely
     videos = [str(video1_path), str(dir1_path), EncodedVideo(video2_path)]
 
     loader = SimpleVideoCollectionLoader(
         videos,
         batch_size=8,
         num_workers=0,  # Use 0 workers for testing
-        transform=my_transform,  # optional
-        buffer_size=64,  # optional (for video files)
-        frame_id_regex=r"frame\D*(\d+)(?!\d)",  # optional (for image directories)
+        transform=my_transform,                    # optional
+        buffer_size=64,                            # optional (for video files)
+        frame_id_regex=r"frame\D*(\d+)(?!\d)",    # optional (for image directories)
     )
 
-    # Iterate over the entire dataset in batches through a single iterator
     for batch in loader:
-        frames = batch["frames"]  # torch.Tensor: B x C x H x W
-        video_indices = batch["video_indices"]  # list of int (video indices)
-        frame_indices = batch["frame_indices"]  # list of int
+        frames = batch["frames"]           # torch.Tensor: (B, C, H, W)
+        video_indices = batch["video_indices"]  # list[int]
+        frame_indices = batch["frame_indices"]  # list[int]
 
-        # Verify the batch structure matches README documentation
         assert isinstance(frames, torch.Tensor)
         assert frames.ndim == 4  # B x C x H x W
         assert isinstance(video_indices, list)
