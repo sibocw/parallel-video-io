@@ -283,7 +283,9 @@ class EncodedVideo(Video):
     ) -> torch.Tensor:
         # If this is the first time reading from this video, initialize the decoder
         if self._decoder is None:
-            self._decoder = self._create_video_decoder(self.path, self.device)
+            self._decoder, self.device = self._create_video_decoder(
+                self.path, self.device
+            )
 
         vir_frame_id = index  # `index` is the virtual frame_id - make alias for clarity
 
@@ -334,12 +336,13 @@ class EncodedVideo(Video):
             )
             self._decoder = None
             torch.cuda.empty_cache()
-            self.device = "cpu"
-            self._decoder = self._create_video_decoder(self.path, "cpu")
+            self._decoder, self.device = self._create_video_decoder(self.path, "cpu")
             return self._decoder.get_frames_at(phy_frame_ids).data
 
     @staticmethod
-    def _create_video_decoder(video_path: Path, device: str = "cpu") -> VideoDecoder:
+    def _create_video_decoder(
+        video_path: Path, device: str = "cpu"
+    ) -> tuple[VideoDecoder, str]:
         """Create a TorchCodec VideoDecoder while holding a shared init lock.
 
         Historically, constructing decoders concurrently across worker processes
@@ -364,7 +367,11 @@ class EncodedVideo(Video):
         frame-accurate seeking on either. CUDA cannot be initialised inside a forked
         DataLoader worker, so a ``"cuda"`` request is downgraded to ``"cpu"`` when
         running in a worker subprocess. As a final safety net, a failed GPU decoder
-        construction falls back to CPU rather than propagating the error."""
+        construction falls back to CPU rather than propagating the error.
+
+        Returns ``(decoder, effective_device)``: the effective device may differ
+        from the requested *device* when either downgrade above fired, so the
+        caller can keep its own ``device`` attribute in sync with reality."""
         if device.startswith("cuda") and get_worker_info() is not None:
             # Forked DataLoader workers cannot (re)initialise CUDA. Decode on CPU
             # here; the GPU path is intended for single-process iteration.
@@ -400,7 +407,8 @@ class EncodedVideo(Video):
                     dimension_order="NCHW",
                     device="cpu",
                 )
-        return decoder
+                device = "cpu"
+        return decoder, device
 
     def close(self):
         # VideoDecoder from torchcodec doesn't have a "close" method - just let Python

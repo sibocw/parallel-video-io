@@ -621,5 +621,4 @@ def get_video_metadata(
         _write_metadata_cache(cache_path, video_path, n_frames, frame_size, fps)
         logger.info("Wrote metadata cache to %s.", cache_path)
 
-    fps_str = f"{fps:g}" if fps is not None else "unknown"
     return VideoMetadata(n_frames=n_frames, frame_size=tuple(frame_size), fps=fps)
