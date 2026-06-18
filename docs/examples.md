@@ -26,7 +26,9 @@ from pvio.io import get_video_metadata, check_num_frames
 n_frames = check_num_frames("example.mp4")
 print(n_frames)  # integer
 
-# Full metadata — results are cached to a JSON file alongside the video.
+# Full metadata — results are cached to a JSON file alongside the video. The cache
+# stores a checksum of the video and is invalidated automatically if the video
+# changes, so using it is always safe.
 # Control caching with the `cache_metadata` and `use_cached_metadata` arguments.
 meta = get_video_metadata("example.mp4")
 print(meta.n_frames, meta.frame_size, meta.fps)  # VideoMetadata named tuple
@@ -73,6 +75,27 @@ write_frames_to_video(
     The writer verifies that all frames share the same `(height, width)`. Some FFmpeg
     builds require frame dimensions to be divisible by 16; use such dimensions to avoid
     unexpected automatic resizing.
+
+## Combining image files into a video
+
+When your frames already live on disk as individual image files, use
+`write_image_paths_to_video` instead of loading them into arrays yourself. It takes
+the same encoding options as `write_frames_to_video` (`mode`, `quality`, `preset`, …)
+and reads the images lazily, one at a time, so an arbitrarily long sequence encodes
+without holding every frame in memory.
+
+```python
+from pathlib import Path
+from pvio.io import write_image_paths_to_video
+
+# Frames are encoded in the order given — sort the paths if order matters.
+image_paths = sorted(Path("frames_dir").glob("frame*.png"))
+write_image_paths_to_video("example.mp4", image_paths, fps=25.0)
+```
+
+The first image's `(height, width)` defines the output size; every other image must
+match it. For combining frames straight from the command line, see the
+[command-line interface](cli.md).
 
 ## Using the PyTorch dataset and dataloader
 

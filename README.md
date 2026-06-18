@@ -12,6 +12,7 @@ After finding myself writing the same thing over and over again for different pr
 2. Write sequences of NumPy frames to H.264 MP4 files with sensible defaults.
 3. PyTorch-compatible `VideoCollectionDataset` and `VideoCollectionDataLoader` that stream frames from many videos in parallel across worker processes.
     - `SimpleVideoCollectionLoader` provides a convenience API that combines dataset and dataloader creation in one call.
+4. A small `pvio` command-line tool (an ffmpeg-lite helper): `pvio encode` combines a directory or list of image files into an H.264 MP4 (with `--mode`, `--quality`, and `--preset` flags), and `pvio info` prints a video's frame count, frame size, and FPS.
 
 **GPU acceleration is automatic.** On a machine with a CUDA GPU, decoding uses
 the GPU (TorchCodec/NVDEC, with frame-accurate seeking preserved) and writing

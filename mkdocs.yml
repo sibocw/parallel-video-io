@@ -58,6 +58,7 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Usage examples: examples.md
+  - Command-line interface: cli.md
   - API Reference:
     - pvio.io: api/io.md
     - pvio.video: api/video.md

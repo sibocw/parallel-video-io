@@ -12,6 +12,7 @@ if sys.platform != "linux":
 from .io import (
     read_frames_from_video,
     write_frames_to_video,
+    write_image_paths_to_video,
     check_num_frames,
     get_video_metadata,
     VideoMetadata,
@@ -26,6 +27,7 @@ from .torch_tools import (
 __all__ = [
     "read_frames_from_video",
     "write_frames_to_video",
+    "write_image_paths_to_video",
     "check_num_frames",
     "get_video_metadata",
     "VideoMetadata",

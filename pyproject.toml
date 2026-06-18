@@ -10,30 +10,51 @@ license = { text = "MIT" }
 classifiers = [ "Operating System :: POSIX :: Linux" ]
 requires-python = ">=3.10,<3.15"
 dependencies = [
+    # TorchCodec
     # Up until torchcodec 0.11, torchcodec minor versions are tied to specific
     # torch minor versions. Versions since 0.12 support torch 2.11 or later.
     # We therefore require these newer versions for both.
     "torch>=2.11,<2.13",
     "torchcodec>=0.12,<0.15",
+    # Generic
+    "numpy>=2.0,<3.0",
     # Image/video IO - might migrate to pyav etc. as is convenient 
     "imageio[tifffile]>=2.37.0,<3.0",
     "imageio-ffmpeg==0.6.0",
     # Parallelization
     "joblib>=1.5,<2.0",
-    # Genereal stuff
+    # Progress bars
     "tqdm>=4.67,<5.0",
-    "numpy>=2.0,<3.0",
+    # CLI
+    "tyro>=0.9,<0.12",
 ]
+
+[project.scripts]
+pvio = "pvio.cli:main"
 
 [project.optional-dependencies]
 dev = [
+    # Unit testing
     "pytest>=9.0,<10.0",
+    # Formatting & linting
     "ruff>=0.15",
-    # For docs
-    "mkdocs-material>=9.5",
+    # Documentation
+    "mkdocs-material>=9.5,<10.0",
     "mkdocstrings[python]>=0.29",
-    "adjusttext>=1.4.0",
-    "plotly>=6.8.0",
+]
+benchmark = [
+    # Competing video IO libraries benchmarked against PVIO. TorchCodec is
+    # already a core dependency. NVIDIA DALI is GPU-only and ships from NVIDIA's
+    # own package index, so it is not pinned here; install it separately (e.g.
+    # `pip install nvidia-dali-cuda120`) to include the DALI backend — it is
+    # automatically skipped when absent.
+    "av>=12,<16",            # PyAV (FFmpeg bindings)
+    "opencv-python>=4.8,<5.0",
+    "eva-decord>=0.6,<0.7",  # CPU-only Decord wheel
+    # Quality scoring (PSNR/SSIM) and reporting/plots.
+    "scikit-image>=0.25,<0.27",
+    "pandas>=2.0,<3.0",
+    "plotly>=6.8,<7.0",
 ]
 
 [project.urls]
