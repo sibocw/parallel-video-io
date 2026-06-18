@@ -36,38 +36,38 @@ _WORKLOAD_LABEL: dict[str, str] = {
 }
 
 _BACKEND_LABEL: dict[str, str] = {
-    "pvio_cpu":       "PVIO (CPU)",
-    "pvio_gpu":       "PVIO (GPU)",
-    "pyav":           "PyAV",
-    "pyav_cpu":       "PyAV (CPU)",
-    "opencv":         "OpenCV",
-    "opencv_cpu":     "OpenCV (CPU)",
-    "decord_cpu":     "Decord (CPU)",
+    "pvio_cpu": "PVIO (CPU)",
+    "pvio_gpu": "PVIO (GPU)",
+    "pyav": "PyAV",
+    "pyav_cpu": "PyAV (CPU)",
+    "opencv": "OpenCV",
+    "opencv_cpu": "OpenCV (CPU)",
+    "decord_cpu": "Decord (CPU)",
     "torchcodec_cpu": "TorchCodec (CPU)",
-    "torchcodec_cuda":"TorchCodec (CUDA)",
-    "dali_gpu":       "DALI (GPU)",
+    "torchcodec_cuda": "TorchCodec (CUDA)",
+    "dali_gpu": "DALI (GPU)",
 }
 
 # GPU-based backends (NVENC/NVDEC/DALI). All others are CPU.
 _IS_GPU = frozenset({"pvio_gpu", "torchcodec_cuda", "dali_gpu"})
 
 # Two-tone color scheme: PVIO anchor colors, uniform shade for all other CPU/GPU.
-_CPU_DARK  = "#0c2e6e"   # PVIO CPU — very dark blue
-_CPU_LIGHT = "#90c4e4"   # all other CPU — light blue
-_GPU_DARK  = "#7a0042"   # PVIO GPU — dark magenta
-_GPU_LIGHT = "#f0a0c4"   # all other GPU — light pink
+_CPU_DARK = "#0c2e6e"  # PVIO CPU — very dark blue
+_CPU_LIGHT = "#90c4e4"  # all other CPU — light blue
+_GPU_DARK = "#7a0042"  # PVIO GPU — dark magenta
+_GPU_LIGHT = "#f0a0c4"  # all other GPU — light pink
 
 _BACKEND_COLOR: dict[str, str] = {
-    "pvio_cpu":        _CPU_DARK,
-    "pvio_gpu":        _GPU_DARK,
-    "pyav":            _CPU_LIGHT,
-    "pyav_cpu":        _CPU_LIGHT,
-    "opencv":          _CPU_LIGHT,
-    "opencv_cpu":      _CPU_LIGHT,
-    "decord_cpu":      _CPU_LIGHT,
-    "torchcodec_cpu":  _CPU_LIGHT,
+    "pvio_cpu": _CPU_DARK,
+    "pvio_gpu": _GPU_DARK,
+    "pyav": _CPU_LIGHT,
+    "pyav_cpu": _CPU_LIGHT,
+    "opencv": _CPU_LIGHT,
+    "opencv_cpu": _CPU_LIGHT,
+    "decord_cpu": _CPU_LIGHT,
+    "torchcodec_cpu": _CPU_LIGHT,
     "torchcodec_cuda": _GPU_LIGHT,
-    "dali_gpu":        _GPU_LIGHT,
+    "dali_gpu": _GPU_LIGHT,
 }
 
 
@@ -82,7 +82,11 @@ def _pvio_first(backend: str) -> tuple:
 
 def _decode_order(backend: str) -> tuple:
     """CPU backends first (pvio first within each group), then GPU."""
-    return (1 if backend in _IS_GPU else 0, 0 if backend.startswith("pvio") else 1, backend)
+    return (
+        1 if backend in _IS_GPU else 0,
+        0 if backend.startswith("pvio") else 1,
+        backend,
+    )
 
 
 def _wl(name: str) -> str:
@@ -117,8 +121,8 @@ def _legend_group(backend: str) -> str:
 
 
 _LEGEND_GROUP_NAME: dict[str, str] = {
-    "pvio_cpu":  "PVIO (CPU)",
-    "pvio_gpu":  "PVIO (GPU)",
+    "pvio_cpu": "PVIO (CPU)",
+    "pvio_gpu": "PVIO (GPU)",
     "other_cpu": "Other CPU",
     "other_gpu": "Other GPU",
 }
@@ -162,7 +166,8 @@ def _bar_panel(
                 showlegend=(lg not in shown_lg),
                 hovertemplate=f"<b>{_be(backend)}</b><br>%{{y:.1f}} {unit}<extra></extra>",
             ),
-            row=row, col=col,
+            row=row,
+            col=col,
         )
         shown_lg.add(lg)
     # Dashed separator between CPU and GPU groups when both are present.
@@ -171,8 +176,13 @@ def _bar_panel(
         xax = "x" if panel_idx == 1 else f"x{panel_idx}"
         yax = "y" if panel_idx == 1 else f"y{panel_idx}"
         fig.add_shape(
-            type="line", x0=n_cpu - 0.5, x1=n_cpu - 0.5, y0=0, y1=1,
-            xref=xax, yref=f"{yax} domain",
+            type="line",
+            x0=n_cpu - 0.5,
+            x1=n_cpu - 0.5,
+            y0=0,
+            y1=1,
+            xref=xax,
+            yref=f"{yax} domain",
             line=dict(color="rgba(100,100,100,0.35)", width=1, dash="dot"),
         )
 
@@ -181,11 +191,13 @@ def plot_encode_quality(df, out: list[Path]):
     sub = _ok(df[df["task"] == "encode_pareto"]).copy()
     if sub.empty:
         return
-    workloads = sorted(sub["workload"].unique(), key=lambda w: (0 if "sd" in w else 1, w))
+    workloads = sorted(
+        sub["workload"].unique(), key=lambda w: (0 if "sd" in w else 1, w)
+    )
     backends = sorted(sub["backend"].unique(), key=_pvio_first)
     metrics = [
-        ("metric_main",        "Throughput (frames/s)"),
-        ("x_compression_ratio","Compression ratio (JPEG folder / video)"),
+        ("metric_main", "Throughput (frames/s)"),
+        ("x_compression_ratio", "Compression ratio (JPEG folder / video)"),
     ]
     n_metrics = len(metrics)
     subplot_titles = [
@@ -193,14 +205,15 @@ def plot_encode_quality(df, out: list[Path]):
         for wl in workloads
         for _, label in metrics
     ]
-    fig = make_subplots(rows=len(workloads) * n_metrics, cols=1, subplot_titles=subplot_titles)
+    fig = make_subplots(
+        rows=len(workloads) * n_metrics, cols=1, subplot_titles=subplot_titles
+    )
     for row_idx, workload in enumerate(workloads, start=1):
         wl_display = _wl(workload)
         for backend in backends:
-            g = (
-                sub[(sub["workload"] == workload) & (sub["backend"] == backend)]
-                .sort_values("x_psnr_db")
-            )
+            g = sub[
+                (sub["workload"] == workload) & (sub["backend"] == backend)
+            ].sort_values("x_psnr_db")
             if g.empty:
                 continue
             param = _QUALITY_PARAM_LABEL.get(backend, "CRF")
@@ -225,11 +238,16 @@ def plot_encode_quality(df, out: list[Path]):
                             f"<b>{display}</b><br>"
                             "PSNR: %{x:.1f} dB<br>"
                             f"Param: {param}=%{{customdata[0]}}<br>"
-                            + ("Throughput: %{y:.0f} fps" if is_fps else "Compression ratio: %{y:.1f}×")
+                            + (
+                                "Throughput: %{y:.0f} fps"
+                                if is_fps
+                                else "Compression ratio: %{y:.1f}×"
+                            )
                             + "<extra></extra>"
                         ),
                     ),
-                    row=sub_row, col=1,
+                    row=sub_row,
+                    col=1,
                 )
         for metric_idx, (_, y_label) in enumerate(metrics, start=1):
             sub_row = (row_idx - 1) * n_metrics + metric_idx
@@ -249,10 +267,12 @@ def plot_encode_matched(df, out: list[Path]):
     matched = analysis.matched_psnr(df, MATCH_PSNR)
     if matched.empty:
         return
-    workloads = sorted(matched["workload"].unique(), key=lambda w: (0 if "sd" in w else 1, w))
+    workloads = sorted(
+        matched["workload"].unique(), key=lambda w: (0 if "sd" in w else 1, w)
+    )
     all_backends = sorted(matched["backend"].unique(), key=_decode_order)
     metrics = [
-        ("metric_main",         "Throughput (frames/s)", "fps"),
+        ("metric_main", "Throughput (frames/s)", "fps"),
         ("x_compression_ratio", "Compression ratio (×)", "×"),
     ]
     n_metrics = len(metrics)
@@ -261,7 +281,9 @@ def plot_encode_matched(df, out: list[Path]):
         for wl in workloads
         for _, label, _ in metrics
     ]
-    fig = make_subplots(rows=len(workloads) * n_metrics, cols=1, subplot_titles=subplot_titles)
+    fig = make_subplots(
+        rows=len(workloads) * n_metrics, cols=1, subplot_titles=subplot_titles
+    )
     shown_lg: set[str] = set()
     for row_idx, workload in enumerate(workloads, start=1):
         panel = matched[matched["workload"] == workload]
@@ -285,19 +307,29 @@ def plot_encode_matched(df, out: list[Path]):
                         hovertemplate=(
                             f"<b>{_be(backend)}</b><br>%{{y:.1f}} {unit}<br>"
                             f"PSNR {eff:.1f} dB"
-                            + ("" if matched_ok else " (off-target — knob did not reach it)")
+                            + (
+                                ""
+                                if matched_ok
+                                else " (off-target — knob did not reach it)"
+                            )
                             + "<extra></extra>"
                         ),
                     ),
-                    row=sub_row, col=1,
+                    row=sub_row,
+                    col=1,
                 )
                 shown_lg.add(lg)
             if 0 < n_cpu < len(backends):
                 xax = "x" if sub_row == 1 else f"x{sub_row}"
                 yax = "y" if sub_row == 1 else f"y{sub_row}"
                 fig.add_shape(
-                    type="line", x0=n_cpu - 0.5, x1=n_cpu - 0.5, y0=0, y1=1,
-                    xref=xax, yref=f"{yax} domain",
+                    type="line",
+                    x0=n_cpu - 0.5,
+                    x1=n_cpu - 0.5,
+                    y0=0,
+                    y1=1,
+                    xref=xax,
+                    yref=f"{yax} domain",
                     line=dict(color="rgba(100,100,100,0.35)", width=1, dash="dot"),
                 )
             fig.update_yaxes(title_text=label, row=sub_row, col=1)
@@ -315,16 +347,14 @@ def plot_encode_matched(df, out: list[Path]):
 def plot_decode(df, out: list[Path]):
     TASKS = [
         ("sequential", "Sequential"),
-        ("random",     "Precise random-access"),
+        ("random", "Precise random-access"),
     ]
     workloads = _decode_workloads(df)
     if not workloads:
         return
     n_tasks = len(TASKS)
     subplot_titles = [
-        f"{_wl(wl)} — {task_label}"
-        for wl in workloads
-        for _, task_label in TASKS
+        f"{_wl(wl)} — {task_label}" for wl in workloads for _, task_label in TASKS
     ]
     n_rows = len(workloads) * n_tasks
     fig = make_subplots(rows=n_rows, cols=1, subplot_titles=subplot_titles)
@@ -339,8 +369,9 @@ def plot_decode(df, out: list[Path]):
             sub_row = (row_idx - 1) * n_tasks + task_idx
             sub = _ok(df[df["task"] == task_key])
             panel = sub[sub["workload"] == workload]
-            _bar_panel(fig, panel, "metric_main", sub_row, 1, 1,
-                       all_backends, shown_lg, "fps")
+            _bar_panel(
+                fig, panel, "metric_main", sub_row, 1, 1, all_backends, shown_lg, "fps"
+            )
             fig.update_yaxes(title_text="Throughput (frames/s)", row=sub_row, col=1)
 
     fig.update_layout(

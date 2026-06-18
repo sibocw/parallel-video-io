@@ -71,6 +71,7 @@ ENCODE_SPECS: list[VideoSpec] = [
     VideoSpec("enc_hd", 720, 1280, _ENCODE_NFRAMES, FPS, "h264", gop=30),
 ]
 
+
 # Quality sweep used to trace each encoder's speed-vs-compression frontier. The
 # values are on the 0-51 H.264 quantiser scale, applied as libx264's CRF or
 # NVENC's QP per encoder. CRF and QP are *not* equivalent operating points, so

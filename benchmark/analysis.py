@@ -58,7 +58,9 @@ def matched_psnr(df: pd.DataFrame, target: float = 0.0) -> pd.DataFrame:
     rows: list[dict] = []
     for workload, wl in sub.groupby("workload"):
         groups = {b: g.sort_values("x_psnr_db") for b, g in wl.groupby("backend")}
-        ranges = {b: (g["x_psnr_db"].min(), g["x_psnr_db"].max()) for b, g in groups.items()}
+        ranges = {
+            b: (g["x_psnr_db"].min(), g["x_psnr_db"].max()) for b, g in groups.items()
+        }
         # Place the target using only encoders whose sweep meaningfully varies.
         varying = {b for b, (lo, hi) in ranges.items() if hi - lo >= _VARYING_DB}
         basis = varying or set(groups)

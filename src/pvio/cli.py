@@ -17,17 +17,17 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+import tyro
+
+from . import _accel
+from .io import get_video_metadata, write_image_paths_to_video
+
 
 def _fmt_bytes(n: int) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024 or unit == "TB":
             return f"{n} {unit}" if unit == "B" else f"{n:.1f} {unit}"
         n /= 1024
-
-import tyro
-
-from . import _accel
-from .io import get_video_metadata, write_image_paths_to_video
 
 
 # File extensions treated as frame images when a directory is given to `encode`.

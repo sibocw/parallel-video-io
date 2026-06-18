@@ -74,7 +74,9 @@ def _bench_point(backend, spec, frames, quality, jpeg_bytes, task) -> Result:
             enc_fps,
             "frames/s",
             extra={
-                "quality_param": backend.quality_display(quality) if backend.tunable else None,
+                "quality_param": backend.quality_display(quality)
+                if backend.tunable
+                else None,
                 "file_size_mb": round(size_bytes / 1e6, 2),
                 "compression_ratio": round(compression_ratio, 1),
                 "psnr_db": round(psnr, 2),

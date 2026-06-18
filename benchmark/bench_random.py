@@ -42,7 +42,9 @@ def _bench_random(backend, spec, indices) -> Result:
         fps = best_of(run, config.N_REPEATS)
         frames = run._frames  # type: ignore[attr-defined]
 
-        recovered = [datagen.recover_index(spec, frames[i]) for i in range(len(indices))]
+        recovered = [
+            datagen.recover_index(spec, frames[i]) for i in range(len(indices))
+        ]
         n_wrong = sum(int(r != idx) for r, idx in zip(recovered, indices))
         return Result(
             "random",

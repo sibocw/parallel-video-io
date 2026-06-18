@@ -397,7 +397,11 @@ def _encode_frames(
         for i, frame in enumerate(frame_iter):
             video_writer.append_data(frame)
 
-            if log_interval is not None and not use_tqdm and (i + 1) % log_interval == 0:
+            if (
+                log_interval is not None
+                and not use_tqdm
+                and (i + 1) % log_interval == 0
+            ):
                 logger.info(f"Written frame {i + 1}/{n_frames}")
 
 
