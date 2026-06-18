@@ -42,7 +42,7 @@ class PvioCPUEncode(EncodeBackend):
         from pvio.io import write_frames_to_video
 
         write_frames_to_video(
-            out_path, list(frames), fps=fps, mode="cpu", quality=quality
+            out_path, list(frames), fps=fps, mode="cpu", quality=quality, quiet=True
         )
 
 
@@ -67,7 +67,7 @@ class PvioGPUEncode(EncodeBackend):
         from pvio.io import write_frames_to_video
 
         write_frames_to_video(
-            out_path, list(frames), fps=fps, mode="gpu", quality=quality
+            out_path, list(frames), fps=fps, mode="gpu", quality=quality, quiet=True
         )
 
 

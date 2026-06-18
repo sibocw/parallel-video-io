@@ -1,12 +1,23 @@
 """Tests for the pvio command-line interface."""
 
+import logging
+
 import numpy as np
 import imageio.v2 as imageio
 import pytest
+import tyro
 from pathlib import Path
 
 from pvio import cli
 from pvio.io import get_video_metadata
+
+
+def _invoke_cli(args: list[str]):
+    """Run the pvio subcommand CLI with *args* (no sys.argv patching needed)."""
+    return tyro.extras.subcommand_cli_from_dict(
+        {"encode": cli.encode, "info": cli.info},
+        args=args,
+    )
 
 
 def _make_images(dir_path: Path, names: list[str], h: int = 16, w: int = 16):
@@ -145,3 +156,143 @@ def test_encode_rejects_mismatched_preset_before_work(tmp_path: Path):
     with pytest.raises(SystemExit):
         cli.encode([img_dir], output=out, mode="cpu", preset="p7")
     assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# quiet flag
+# ---------------------------------------------------------------------------
+
+
+def test_encode_quiet_suppresses_info_logs(tmp_path: Path, caplog):
+    """quiet=True emits no INFO-level messages."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, [f"frame{i}.png" for i in range(3)], h=16, w=16)
+    out = tmp_path / "out.mp4"
+
+    with caplog.at_level(logging.INFO):
+        cli.encode([img_dir], output=out, fps=10.0, mode="cpu", quiet=True)
+
+    info_msgs = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert info_msgs == [], (
+        f"Expected no INFO logs with quiet=True, got: {[r.message for r in info_msgs]}"
+    )
+
+
+def test_encode_quiet_still_produces_valid_video(tmp_path: Path):
+    """quiet=True does not affect correctness of the output video."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, [f"frame{i}.png" for i in range(4)], h=32, w=48)
+    out = tmp_path / "out.mp4"
+
+    cli.encode([img_dir], output=out, fps=10.0, mode="cpu", quiet=True)
+
+    assert out.is_file()
+    meta = get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)
+    assert meta.n_frames == 4
+    assert meta.frame_size == (32, 48)
+
+
+def test_encode_quiet_warnings_still_emitted(monkeypatch, caplog):
+    """quiet=True should not suppress WARNING-level messages."""
+    monkeypatch.setattr(cli._accel, "cuda_available", lambda: False)
+    with caplog.at_level(logging.WARNING):
+        cli._validate_preset("p7", "auto")
+    assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# Short CLI aliases
+# ---------------------------------------------------------------------------
+
+
+def test_cli_short_alias_output(tmp_path: Path):
+    """-o accepted as alias for --output."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, ["frame0.png", "frame1.png"], h=16, w=16)
+    out = tmp_path / "out.mp4"
+
+    _invoke_cli(["encode", str(img_dir), "-o", str(out), "--mode", "cpu", "-q"])
+    assert out.is_file()
+
+
+def test_cli_short_alias_fps(tmp_path: Path):
+    """-fps accepted as alias for --fps."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, [f"frame{i}.png" for i in range(3)], h=16, w=16)
+    out = tmp_path / "out.mp4"
+
+    _invoke_cli(
+        [
+            "encode",
+            str(img_dir),
+            "--output",
+            str(out),
+            "-fps",
+            "24",
+            "--mode",
+            "cpu",
+            "-q",
+        ]
+    )
+
+    meta = get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)
+    assert meta.fps == pytest.approx(24.0, abs=1.0)
+
+
+def test_cli_short_alias_mode(tmp_path: Path):
+    """-m accepted as alias for --mode."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, ["frame0.png"], h=16, w=16)
+    out = tmp_path / "out.mp4"
+
+    _invoke_cli(["encode", str(img_dir), "-o", str(out), "-m", "cpu", "-q"])
+    assert out.is_file()
+
+
+def test_cli_short_alias_quality(tmp_path: Path):
+    """-qa accepted as alias for --quality."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, ["frame0.png"], h=16, w=16)
+    out = tmp_path / "out.mp4"
+
+    _invoke_cli(
+        ["encode", str(img_dir), "-o", str(out), "--mode", "cpu", "-qa", "28", "-q"]
+    )
+    assert out.is_file()
+
+
+def test_cli_short_alias_from_file(tmp_path: Path):
+    """-f accepted as alias for --from-file."""
+    img_dir = tmp_path / "frames"
+    paths = _make_images(img_dir, [f"frame{i}.png" for i in range(3)], h=16, w=16)
+    list_file = tmp_path / "paths.txt"
+    list_file.write_text("\n".join(str(p) for p in paths))
+    out = tmp_path / "out.mp4"
+
+    _invoke_cli(["encode", "-f", str(list_file), "-o", str(out), "--mode", "cpu", "-q"])
+
+    meta = get_video_metadata(out, cache_metadata=False, use_cached_metadata=False)
+    assert meta.n_frames == 3
+
+
+def test_cli_short_alias_quiet(tmp_path: Path, caplog):
+    """-q accepted as alias for --quiet and suppresses INFO logs."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, ["frame0.png", "frame1.png"], h=16, w=16)
+    out = tmp_path / "out.mp4"
+
+    with caplog.at_level(logging.INFO):
+        _invoke_cli(["encode", str(img_dir), "-o", str(out), "--mode", "cpu", "-q"])
+
+    info_msgs = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert info_msgs == []
+
+
+def test_cli_short_alias_sort(tmp_path: Path):
+    """-s accepted as alias for --sort."""
+    img_dir = tmp_path / "frames"
+    _make_images(img_dir, ["frame1.png", "frame2.png"], h=16, w=16)
+    out = tmp_path / "out.mp4"
+
+    _invoke_cli(["encode", str(img_dir), "-o", str(out), "--mode", "cpu", "-s", "-q"])
+    assert out.is_file()

@@ -15,7 +15,7 @@ import logging
 import re
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
 import tyro
 
@@ -133,13 +133,16 @@ def encode(
     inputs: list[Path] = [],
     /,
     *,
-    output: Path,
-    fps: float = 30.0,
-    mode: Literal["auto", "gpu", "cpu"] = "auto",
-    quality: int = _accel.DEFAULT_QUALITY,
-    preset: str | None = None,
-    sort: bool = True,
-    from_file: Path | None = None,
+    output: Annotated[Path, tyro.conf.arg(aliases=("-o",))],
+    fps: Annotated[float, tyro.conf.arg(aliases=("-fps",))] = 30.0,
+    mode: Annotated[
+        Literal["auto", "gpu", "cpu"], tyro.conf.arg(aliases=("-m",))
+    ] = "auto",
+    quality: Annotated[int, tyro.conf.arg(aliases=("-qa",))] = _accel.DEFAULT_QUALITY,
+    preset: Annotated[str | None, tyro.conf.arg(aliases=("-p",))] = None,
+    sort: Annotated[bool, tyro.conf.arg(aliases=("-s",))] = True,
+    from_file: Annotated[Path | None, tyro.conf.arg(aliases=("-f",))] = None,
+    quiet: Annotated[bool, tyro.conf.arg(aliases=("-q",))] = False,
     log_interval: int | None = 100,
 ) -> None:
     """Combine image files into an H.264 MP4 video.
@@ -180,8 +183,12 @@ def encode(
             Use instead of positional ``inputs`` when encoding a large number
             of frames (avoids shell command-line length limits). Cannot be
             combined with positional ``inputs``.
+        quiet: Suppress all informational output: encoder parameters, the
+            progress bar, and the compression-ratio summary. Errors and
+            warnings are still printed.
         log_interval: Log progress every N frames (when not in an interactive
-            terminal). Set to a non-positive value to disable.
+            terminal). Set to a non-positive value to disable. Ignored when
+            ``quiet`` is set.
     """
     if inputs and from_file is not None:
         raise SystemExit("Cannot use both positional inputs and --from-file.")
@@ -207,7 +214,10 @@ def encode(
     output.parent.mkdir(parents=True, exist_ok=True)
 
     input_bytes = sum(p.stat().st_size for p in paths)
-    logging.info("Encoding %d frame(s) into %s (mode=%s).", len(paths), output, mode)
+    if not quiet:
+        logging.info(
+            "Encoding %d frame(s) into %s (mode=%s).", len(paths), output, mode
+        )
     write_image_paths_to_video(
         output,
         paths,
@@ -216,16 +226,18 @@ def encode(
         quality=quality,
         preset=preset,
         log_interval=log_interval if (log_interval and log_interval > 0) else None,
+        quiet=quiet,
     )
-    output_bytes = output.stat().st_size
-    ratio = input_bytes / output_bytes if output_bytes else float("inf")
-    logging.info(
-        "Wrote %s  |  compression ratio %.1f× (%s → %s)",
-        output,
-        ratio,
-        _fmt_bytes(input_bytes),
-        _fmt_bytes(output_bytes),
-    )
+    if not quiet:
+        output_bytes = output.stat().st_size
+        ratio = input_bytes / output_bytes if output_bytes else float("inf")
+        logging.info(
+            "Wrote %s  |  compression ratio %.1f× (%s → %s)",
+            output,
+            ratio,
+            _fmt_bytes(input_bytes),
+            _fmt_bytes(output_bytes),
+        )
 
 
 def info(

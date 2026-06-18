@@ -92,6 +92,7 @@ def write_frames_to_video(
     preset: str | None = None,
     extra_ffmpeg_params: list[str] | None = None,
     log_interval: int | None = None,
+    quiet: bool = False,
 ) -> None:
     """Write a sequence of frames to an H.264 MP4 file.
 
@@ -128,6 +129,8 @@ def write_frames_to_video(
             quality/preset flags, as an escape hatch for advanced options.
         log_interval: If set, log progress every *log_interval* frames at
             ``INFO`` level.
+        quiet: Suppress the encoder-parameters log line and the progress bar.
+            When ``True``, *log_interval* is also ignored.
 
     Raises:
         ValueError: If *frames* is empty, contains frames with mismatched
@@ -160,6 +163,7 @@ def write_frames_to_video(
         preset=preset,
         extra_ffmpeg_params=extra_ffmpeg_params,
         log_interval=log_interval,
+        quiet=quiet,
     )
 
 
@@ -173,6 +177,7 @@ def write_image_paths_to_video(
     preset: str | None = None,
     extra_ffmpeg_params: list[str] | None = None,
     log_interval: int | None = None,
+    quiet: bool = False,
 ) -> None:
     """Combine on-disk image files into an H.264 MP4 file.
 
@@ -203,6 +208,8 @@ def write_image_paths_to_video(
             quality/preset flags.
         log_interval: If set, log progress every *log_interval* frames at
             ``INFO`` level.
+        quiet: Suppress the encoder-parameters log line and the progress bar.
+            When ``True``, *log_interval* is also ignored.
 
     Raises:
         ValueError: If *image_paths* is empty, an image's dimensions differ from
@@ -238,6 +245,7 @@ def write_image_paths_to_video(
         preset=preset,
         extra_ffmpeg_params=extra_ffmpeg_params,
         log_interval=log_interval,
+        quiet=quiet,
     )
 
 
@@ -283,6 +291,7 @@ def _encode_with_fallback(
     preset: str | None,
     extra_ffmpeg_params: list[str] | None,
     log_interval: int | None,
+    quiet: bool = False,
 ) -> None:
     """Encode *frames* with the NVENC→libx264 attempt/fallback strategy.
 
@@ -334,11 +343,12 @@ def _encode_with_fallback(
     last_error: Exception | None = None
     for attempt_idx, (attempt_codec, attempt_params, ffmpeg_exe) in enumerate(attempts):
         is_last = attempt_idx == len(attempts) - 1
-        logger.info(
-            "Encoder: %s | params: %s",
-            attempt_codec,
-            " ".join(attempt_params),
-        )
+        if not quiet:
+            logger.info(
+                "Encoder: %s | params: %s",
+                attempt_codec,
+                " ".join(attempt_params),
+            )
         try:
             with _imageio_ffmpeg_exe(ffmpeg_exe):
                 _encode_frames(
@@ -348,7 +358,8 @@ def _encode_with_fallback(
                     fps,
                     attempt_codec,
                     attempt_params,
-                    log_interval,
+                    None if quiet else log_interval,
+                    quiet=quiet,
                 )
             return
         except Exception as e:
@@ -374,13 +385,14 @@ def _encode_frames(
     codec: str,
     ffmpeg_params: list[str],
     log_interval: int | None,
+    quiet: bool = False,
 ) -> None:
     """Encode *frames* to *video_path* with imageio's FFmpeg backend.
 
     *frames* is any iterable of uint8 ``(H, W, C)`` arrays; *n_frames* is its
     length, used only for progress logging.
     """
-    use_tqdm = sys.stdout.isatty()
+    use_tqdm = sys.stdout.isatty() and not quiet
     with imageio.get_writer(
         str(video_path),
         "ffmpeg",

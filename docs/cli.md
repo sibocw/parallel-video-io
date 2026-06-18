@@ -26,15 +26,16 @@ pvio encode frames/ --output out.mp4 --mode gpu --preset p7
 
 Key options:
 
-| Flag | Meaning |
-| --- | --- |
-| `--output` | Output `.mp4` path (required). Parent directories are created. |
-| `--fps` | Frames per second (default: 30). |
-| `--mode` | `auto` (default), `gpu`, or `cpu`. |
-| `--quality` | 0–51 H.264 quantiser scale, lower = higher quality (default: 20). |
-| `--preset` | Encoder preset — see the note below. |
-| `--sort` / `--no-sort` | Natural numeric-aware ordering (on by default). |
-| `--from-file` | Text file with one image path per line (alternative to a directory). |
+| Flag | Alias | Meaning |
+| --- | --- | --- |
+| `--output` | `-o` | Output `.mp4` path (required). Parent directories are created. |
+| `--fps` | `-fps` | Frames per second (default: 30). |
+| `--mode` | `-m` | `auto` (default), `gpu`, or `cpu`. |
+| `--quality` | `-qa` | 0–51 H.264 quantiser scale, lower = higher quality (default: 20). |
+| `--preset` | `-p` | Encoder preset — see the note below. |
+| `--sort` / `--no-sort` | `-s` / `--no-s` | Natural numeric-aware ordering (on by default). |
+| `--from-file` | `-f` | Text file with one image path per line (alternative to a directory). |
+| `--quiet` / `--no-quiet` | `-q` / `--no-q` | Suppress encoder parameters, progress bar, and compression-ratio summary. |
 
 !!! warning "Presets are encoder-specific"
     `--preset` must match the encoder that `--mode` selects: **libx264**
