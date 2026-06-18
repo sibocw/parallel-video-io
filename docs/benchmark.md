@@ -25,6 +25,8 @@ for full methodology, metric definitions, and backend notes.
 
 --8<-- "benchmark/results/figures/decode_throughput.html"
 
-## Detailed results
+
+
+<!-- Detailed results: improt from MD file -->
 
 --8<-- "benchmark/results/SUMMARY.md"

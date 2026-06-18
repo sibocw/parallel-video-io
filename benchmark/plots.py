@@ -187,12 +187,13 @@ def plot_encode_quality(df, out: list[Path]):
         ("metric_main",        "Throughput (frames/s)"),
         ("x_compression_ratio","Compression ratio (JPEG folder / video)"),
     ]
+    n_metrics = len(metrics)
     subplot_titles = [
         f"{_wl(wl)} — {label.split('(')[0].strip()}"
         for wl in workloads
         for _, label in metrics
     ]
-    fig = make_subplots(rows=len(workloads), cols=2, subplot_titles=subplot_titles)
+    fig = make_subplots(rows=len(workloads) * n_metrics, cols=1, subplot_titles=subplot_titles)
     for row_idx, workload in enumerate(workloads, start=1):
         wl_display = _wl(workload)
         for backend in backends:
@@ -206,7 +207,8 @@ def plot_encode_quality(df, out: list[Path]):
             display = _be(backend)
             color = _color(backend)
             cd = list(zip(g["x_quality_param"].astype(int), [wl_display] * len(g)))
-            for col_idx, (y_col, y_label) in enumerate(metrics, start=1):
+            for metric_idx, (y_col, _) in enumerate(metrics, start=1):
+                sub_row = (row_idx - 1) * n_metrics + metric_idx
                 is_fps = y_col == "metric_main"
                 fig.add_trace(
                     go.Scatter(
@@ -215,7 +217,7 @@ def plot_encode_quality(df, out: list[Path]):
                         mode="lines+markers",
                         name=display,
                         legendgroup=backend,
-                        showlegend=(row_idx == 1 and col_idx == 1),
+                        showlegend=(row_idx == 1 and metric_idx == 1),
                         line=dict(color=color),
                         marker=dict(color=color),
                         customdata=cd,
@@ -227,16 +229,16 @@ def plot_encode_quality(df, out: list[Path]):
                             + "<extra></extra>"
                         ),
                     ),
-                    row=row_idx, col=col_idx,
+                    row=sub_row, col=1,
                 )
-            fig.update_xaxes(title_text="PSNR (dB)", row=row_idx, col=1)
-            fig.update_xaxes(title_text="PSNR (dB)", row=row_idx, col=2)
-            fig.update_yaxes(title_text=metrics[0][1], row=row_idx, col=1)
-            fig.update_yaxes(title_text=metrics[1][1], row=row_idx, col=2)
+        for metric_idx, (_, y_label) in enumerate(metrics, start=1):
+            sub_row = (row_idx - 1) * n_metrics + metric_idx
+            fig.update_xaxes(title_text="PSNR (dB)", row=sub_row, col=1)
+            fig.update_yaxes(title_text=y_label, row=sub_row, col=1)
     fig.update_layout(
         title="Encode throughput and compression ratio vs quality (PSNR)",
         hovermode="closest",
-        height=350 * len(workloads),
+        height=350 * len(workloads) * n_metrics,
         legend_title_text="Backend",
     )
     out.append(_save(fig, "encode_quality.html"))
@@ -253,18 +255,20 @@ def plot_encode_matched(df, out: list[Path]):
         ("metric_main",         "Throughput (frames/s)", "fps"),
         ("x_compression_ratio", "Compression ratio (×)", "×"),
     ]
+    n_metrics = len(metrics)
     subplot_titles = [
         f"{_wl(wl)} — {label.split('(')[0].strip()}"
         for wl in workloads
         for _, label, _ in metrics
     ]
-    fig = make_subplots(rows=len(workloads), cols=2, subplot_titles=subplot_titles)
+    fig = make_subplots(rows=len(workloads) * n_metrics, cols=1, subplot_titles=subplot_titles)
     shown_lg: set[str] = set()
     for row_idx, workload in enumerate(workloads, start=1):
         panel = matched[matched["workload"] == workload]
         backends = [b for b in all_backends if not panel[panel["backend"] == b].empty]
         n_cpu = sum(1 for b in backends if b not in _IS_GPU)
-        for col_idx, (col_name, label, unit) in enumerate(metrics, start=1):
+        for metric_idx, (col_name, label, unit) in enumerate(metrics, start=1):
+            sub_row = (row_idx - 1) * n_metrics + metric_idx
             for backend in backends:
                 g = panel[panel["backend"] == backend]
                 lg = _legend_group(backend)
@@ -285,25 +289,24 @@ def plot_encode_matched(df, out: list[Path]):
                             + "<extra></extra>"
                         ),
                     ),
-                    row=row_idx, col=col_idx,
+                    row=sub_row, col=1,
                 )
                 shown_lg.add(lg)
             if 0 < n_cpu < len(backends):
-                panel_idx = (row_idx - 1) * 2 + col_idx
-                xax = "x" if panel_idx == 1 else f"x{panel_idx}"
-                yax = "y" if panel_idx == 1 else f"y{panel_idx}"
+                xax = "x" if sub_row == 1 else f"x{sub_row}"
+                yax = "y" if sub_row == 1 else f"y{sub_row}"
                 fig.add_shape(
                     type="line", x0=n_cpu - 0.5, x1=n_cpu - 0.5, y0=0, y1=1,
                     xref=xax, yref=f"{yax} domain",
                     line=dict(color="rgba(100,100,100,0.35)", width=1, dash="dot"),
                 )
-            fig.update_yaxes(title_text=label, row=row_idx, col=col_idx)
+            fig.update_yaxes(title_text=label, row=sub_row, col=1)
     tgt = matched["x_target_psnr"].iloc[0]
     label = f"{MATCH_PSNR:.0f} dB" if MATCH_PSNR > 0 else f"≈{tgt:.0f} dB (auto)"
     fig.update_layout(
         title=f"Encode at matched image quality (target PSNR {label})  ·  blue = CPU, pink = GPU",
         barmode="group",
-        height=350 * len(workloads),
+        height=350 * len(workloads) * n_metrics,
         legend_title_text="Backend",
     )
     out.append(_save(fig, "encode_matched.html"))
@@ -317,13 +320,14 @@ def plot_decode(df, out: list[Path]):
     workloads = _decode_workloads(df)
     if not workloads:
         return
+    n_tasks = len(TASKS)
     subplot_titles = [
         f"{_wl(wl)} — {task_label}"
         for wl in workloads
         for _, task_label in TASKS
     ]
-    n_rows, n_cols = len(workloads), len(TASKS)
-    fig = make_subplots(rows=n_rows, cols=n_cols, subplot_titles=subplot_titles)
+    n_rows = len(workloads) * n_tasks
+    fig = make_subplots(rows=n_rows, cols=1, subplot_titles=subplot_titles)
 
     all_backends = sorted(
         {b for tk, _ in TASKS for b in _ok(df[df["task"] == tk])["backend"].unique()},
@@ -331,12 +335,13 @@ def plot_decode(df, out: list[Path]):
     )
     shown_lg: set[str] = set()
     for row_idx, workload in enumerate(workloads, start=1):
-        for col_idx, (task_key, _) in enumerate(TASKS, start=1):
+        for task_idx, (task_key, _) in enumerate(TASKS, start=1):
+            sub_row = (row_idx - 1) * n_tasks + task_idx
             sub = _ok(df[df["task"] == task_key])
             panel = sub[sub["workload"] == workload]
-            _bar_panel(fig, panel, "metric_main", row_idx, col_idx, n_cols,
+            _bar_panel(fig, panel, "metric_main", sub_row, 1, 1,
                        all_backends, shown_lg, "fps")
-            fig.update_yaxes(title_text="Throughput (frames/s)", row=row_idx, col=col_idx)
+            fig.update_yaxes(title_text="Throughput (frames/s)", row=sub_row, col=1)
 
     fig.update_layout(
         title="Decode throughput  (blue = CPU · pink = GPU)",

@@ -51,10 +51,11 @@ def _write_summary(df, path) -> None:
     from . import analysis, config
 
     ok = df[df["error"].isna() & df["metric_main"].notna()]
-    lines = ["# Benchmark summary", ""]
+    lines = ["## Benchmark result tables", ""]
 
     def section(title, body):
-        lines.extend([f"## {title}", "", body, ""])
+        indented = "\n".join("    " + line for line in body.split("\n"))
+        lines.extend([f'??? info "{title}"', "", indented, ""])
 
     matched = analysis.matched_psnr(df, config.MATCH_PSNR)
     if matched.shape[0]:
