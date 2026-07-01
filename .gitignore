@@ -307,3 +307,8 @@ $RECYCLE.BIN/
 benchmark/data/
 benchmark/results/results.csv
 benchmark/results/environment.json
+
+# Local repro data in bug/ — never commit large videos or their cache sidecars
+bug/*.mkv
+bug/*.mp4
+bug/*.metadata.json
