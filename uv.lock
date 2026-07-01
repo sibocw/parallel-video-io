@@ -1135,9 +1135,10 @@ wheels = [
 
 [[package]]
 name = "parallel-video-io"
-version = "0.1.9"
+version = "0.1.10a0"
 source = { editable = "." }
 dependencies = [
+    { name = "av" },
     { name = "imageio", extra = ["tifffile"] },
     { name = "imageio-ffmpeg" },
     { name = "joblib" },
@@ -1151,7 +1152,6 @@ dependencies = [
 
 [package.optional-dependencies]
 benchmark = [
-    { name = "av" },
     { name = "eva-decord" },
     { name = "opencv-python" },
     { name = "pandas" },
@@ -1167,7 +1167,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "av", marker = "extra == 'benchmark'", specifier = ">=12,<16" },
+    { name = "av", specifier = ">=12,<16" },
     { name = "eva-decord", marker = "extra == 'benchmark'", specifier = ">=0.6,<0.7" },
     { name = "imageio", extras = ["tifffile"], specifier = ">=2.37.0,<3.0" },
     { name = "imageio-ffmpeg", specifier = "==0.6.0" },

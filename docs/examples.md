@@ -13,8 +13,8 @@ n_frames = check_num_frames("example.mp4")
 print(n_frames)  # integer
 
 # Full metadata — results are cached to a JSON file alongside the video. The cache
-# stores a checksum of the video and is invalidated automatically if the video
-# changes, so using it is always safe.
+# stores the video's (size, mtime) signature and is invalidated automatically if
+# the video changes, so using it is always safe.
 # Control caching with the `cache_metadata` and `use_cached_metadata` arguments.
 meta = get_video_metadata("example.mp4")
 print(meta.n_frames, meta.frame_size, meta.fps)  # VideoMetadata named tuple
@@ -31,6 +31,12 @@ frames, fps = read_frames_from_video("example.mp4")
 # ... or just specific frames
 frames, fps = read_frames_from_video("example.mp4", frame_indices=[0, 5])
 ```
+
+Frames are returned at the source's native bit depth and channel layout: an
+ordinary 8-bit video gives `uint8` `(H, W, 3)` arrays, while a high-bit-depth
+lossless source (e.g. 16-bit FFV1) gives `uint16` arrays — and a source with an
+alpha channel keeps it (`(H, W, 4)`). The real pixel values are preserved rather
+than being truncated to 8 bits.
 
 ## Writing a video
 
